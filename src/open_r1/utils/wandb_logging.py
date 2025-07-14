@@ -9,3 +9,4 @@ def init_wandb_training(training_args):
         os.environ["WANDB_ENTITY"] = training_args.wandb_entity
     if training_args.wandb_project is not None:
         os.environ["WANDB_PROJECT"] = training_args.wandb_project
+    print("wandb_logging.py line 12 wandb initialized")

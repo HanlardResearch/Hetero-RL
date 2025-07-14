@@ -100,7 +100,8 @@ def pop_from_fs_queue(queue_dir: Path, processing_dir: Path, rank: int, timeout:
         finally:
             # 5. 确保在处理完成后（无论成功还是失败）都删除文件，避免处理目录堆积
             if processing_path.exists():
-                processing_path.unlink()
+            #     processing_path.unlink()
+                print(f"文件迁移至：{processing_path}")
 
     # 如果在指定时间内没有等到任何文件，则超时
     print(f"WARNING [Rank {rank}]: Timed out after {timeout}s waiting for data from the file queue at '{queue_dir}'.")

@@ -245,9 +245,9 @@ class SamplerGPGTrainer(GPGTrainer):
                 # Compute prompt length and extract completion ids
                 prompt_length = prompt_ids.size(1)
                 logger.info(f"prompt_ids.shape:{prompt_ids.shape}")
-                logger.info(f"prompt_ids:{prompt_ids}")
+                # logger.info(f"prompt_ids:{prompt_ids}")
                 logger.info(f"prompt_completion_ids.shape:{prompt_completion_ids.shape}")
-                logger.info(f"prompt_completion_ids:{prompt_completion_ids}")
+                # logger.info(f"prompt_completion_ids:{prompt_completion_ids}")
                 prompt_ids = prompt_completion_ids[:, :prompt_length]
                 completion_ids = prompt_completion_ids[:, prompt_length:]
                 # all_prompts_text = gather_object(prompts_text)
@@ -329,10 +329,19 @@ class SamplerGPGTrainer(GPGTrainer):
                         keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                         reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                         output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+
+                        logger.info("*"*50+"Q:")
+                        logger.info(f"prompts:{prompts}")
+                        logger.info("*"*50+"A:")
+                        logger.info(f"completions:{completions}")
+                        logger.info("*"*50+"Reward")
+                        logger.info(f"output_reward_func:{output_reward_func}")
+                        logger.info("*"*50)
+
+
                         # Convert None values to NaN
                         output_reward_func = [reward if reward is not None else torch.nan for reward in
                                               output_reward_func]
-
                         rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
             # If all reward functions return None for a given row, issue a detailed warning
@@ -606,10 +615,10 @@ def main(script_args, training_args, model_args):
     # Set seed for reproducibility
 
     rank =training_args.local_rank
-    seed= int((rank+1)*(int(time.time()*10)%365))
-    training_args.seed = seed
-    set_seed(seed)
-
+    # seed= int((rank+1)*(int(time.time()*10)%365))
+    # training_args.seed = seed
+    # set_seed(seed)
+    seed = training_args.seed
     ###############
     # Setup logging
     ###############
@@ -630,7 +639,7 @@ def main(script_args, training_args, model_args):
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
         + f" distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
-    logger.info(f"[Rank={rank}] Random seed {seed}")
+    # logger.info(f"[Rank={rank}] Random seed {seed}")
     logger.info(f"Model parameters {model_args}")
     logger.info(f"Script parameters {script_args}")
     logger.info(f"Training parameters {training_args}")
