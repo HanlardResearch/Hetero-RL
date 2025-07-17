@@ -12,60 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-
-import torch.utils.data
-from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
-from datasets import Dataset, IterableDataset
-from torch import nn
-from transformers import (
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-    Trainer,
-    TrainerCallback,
-    is_wandb_available,
-)
-from transformers.utils import is_peft_available
-from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from trl.import_utils import is_rich_available, is_vllm_available
-from trl.models import  unwrap_model_for_generation
-from trl.trainer.grpo_trainer import RepeatRandomSampler
-from trl.trainer.utils import (
-    pad,
-    print_prompt_completions_sample,
-)
-
+from contextlib import nullcontext
+import time
 import inspect
-
-if is_wandb_available():
-    import wandb
-
 import logging
 import os
 import sys
-
 import datasets
 import torch
 import transformers
 from datasets import load_dataset
-from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint
-
 from open_r1.configs import GRPOConfig, GRPOScriptArguments, GPGConfig
 from open_r1.rewards import get_reward_funcs
 from open_r1.utils import get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
-from open_r1.gpg_trainer import GPGTrainer
+from open_r1.gpg_trainer_vllm import GPGTrainer
 from open_r1.utils.data_utils import custom_loading_dataset
 from transformers import TrainerCallback
 from pathlib import Path
-from async_utils import setup_fs_queue, pop_from_fs_queue,SamplerSyncCallback # 新增
 from trl.extras.profiling import profiling_decorator, profiling_context
-from typing import Any, Callable, Optional, Union
 from typing import Dict, Any, Union
+from async_utils import setup_fs_queue, push_to_fs_queue # 新增
+
+from transformers import set_seed, TrainerControl
 import torch.nn.functional as F
+import warnings
+
+import torch.utils.data
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
+
+from torch import nn
+from transformers import (
+    Trainer,
+    is_wandb_available,
+)
+from transformers.utils import is_peft_available
+from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from trl.import_utils import is_vllm_available
+from transformers.utils import is_rich_available
+from trl.models import  unwrap_model_for_generation
+from trl.trainer.grpo_trainer import RepeatSampler
+from trl.trainer.utils import (
+    pad,
+    print_prompt_completions_sample,
+)
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
+
+if is_wandb_available():
+    import wandb
+    # print("wandb has imported")
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,193 +106,108 @@ def pad_sequence_to_length(tensors, max_seq_len, pad_token_id, left_pad=False):
         return tensors
     pad_tuple = (max_seq_len - tensors.shape[-1], 0) if left_pad else (0, max_seq_len - tensors.shape[-1])
     return F.pad(tensors, pad_tuple, "constant", pad_token_id)
-# =================================================================================
-# 定义一个修改版的 GPGTrainer，用于学习器
-# =================================================================================
 
-class LearnerGPGTrainer(GPGTrainer):
+
+
+
+# =================================================================================
+# 定义一个专门用于采样的 GPGTrainer
+# =================================================================================
+class SamplerGPGTrainer(GPGTrainer):
+    """
+    一个专门用于采样的 GPGTrainer 子类。
+    它封装了模型同步、数据生成和与 Redis 通信的所有逻辑。
+    """
+
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # 从环境变量获取共享目录路径
-        fs_queue_path = os.getenv("FS_QUEUE_PATH",  "/Async/Qwen3-0.6B")
+        # 移除 kwargs 中的 optimizers，以防与我们的虚拟优化器冲突
+        self.fs_queue_path = kwargs.pop("fs_queue_path")
 
-        self.sync_weights_path = Path(
-            os.getenv("SYNC_WEIGHTS_PATH", "/tmp/Qwen3-0.6B/gpg_async_weights.pt"))
+        # 使用虚拟优化器安全地初始化父类
+        kwargs.pop("optimizers", None)
+        super().__init__(*args, optimizers=(None, None), **kwargs)
 
-        # 设置文件队列目录
-        self.queue_dir, self.processing_dir = setup_fs_queue(fs_queue_path)
+        # 设置文件队列
+        self.queue_dir, _ = setup_fs_queue(self.fs_queue_path)
 
-        # 获取当前进程的 rank，用于日志和调试
+        self.log_interval = int(os.getenv("SAMPLER_LOG_INTERVAL", "10"))
+        self.sync_weights_path = Path(os.getenv("SYNC_WEIGHTS_PATH", "/tmp/Qwen3-0.6B/gpg_async_weights.pt"))
+        self.last_sync_time = 0
         self.rank = self.accelerator.process_index
-
-        # 从环境变量或参数中获取超时时间
-        # 默认设置为20分钟，以防采样器暂时卡顿
-        self.queue_timeout = int(os.getenv("QUEUE_TIMEOUT_SECONDS", "1200"))
-
-        logger.info(
-            f"[Rank {self.rank}] Learner initialized. "
-            f"Reading from queue: {self.queue_dir}, "
-            f"Using processing dir: {self.processing_dir}"
-        )
-
-
-
-
-    # def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-    #     mode = "train" if self.model.training else "eval"
-    #     metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
-    #
-    #     # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-    #     # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-    #     if mode == "eval":
-    #         metrics = {f"eval_{key}": val for key, val in metrics.items()}
-    #
-    #     logs = {**logs, **metrics}
-    #     super().log(logs, start_time)
-    #     self._metrics[mode].clear()
-    #
-    #     if self.accelerator.is_main_process and self.log_completions:
-    #         if is_rich_available():
-    #             print_prompt_completions_sample(
-    #                 self._textual_logs["prompt"],
-    #                 self._textual_logs["completion"],
-    #                 self._textual_logs["rewards"],
-    #                 self._textual_logs["advantages"],
-    #                 self.state.global_step,
-    #                 self.num_completions_to_print,
-    #             )
-    #
-    #         if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-    #             import pandas as pd
-    #
-    #             table = {
-    #                 "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
-    #                 "prompt": self._textual_logs["prompt"],
-    #                 "completion": self._textual_logs["completion"],
-    #                 **self._textual_logs["rewards"],
-    #                 "advantage": self._textual_logs["advantages"],
-    #             }
-    #             torch.save(table, f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table_line173.pt")
-    #             df = pd.DataFrame(table)
-    #             if self.wandb_log_unique_prompts:
-    #                 df = df.drop_duplicates(subset=["prompt"])
-    #             wandb.log({"completions": wandb.Table(dataframe=df)})
+        # 封装内部状态
+        self._dataloader = self.get_train_dataloader()
+        self._epoch_iterator = iter(self._dataloader)
+        self.batch_ids = 0
+        self.model_ids = 0
 
     @profiling_decorator
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("The GRPOTrainer does not support returning outputs")
-        # Compute the per-token log probabilities for the model
-
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
-
-        # Compute the loss
-        advantages = inputs["advantages"]
-
-        per_token_loss = - per_token_logps * advantages.unsqueeze(1)
-
-        if self.beta != 0.0:
-            per_token_loss = per_token_loss + self.beta * per_token_kl
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
-
-        #Log the metrics
-        mode = "train" if self.model.training else "eval"
-
-        if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-
-        if self.args.adjust_gd and mode=="train":
-            loss = loss / self._metrics[mode]['inverse_alpha'][-1]
-
-        return loss
-
-    def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> Dict[str, Union[torch.Tensor, Any]]:
-        """
-        重写 _prepare_inputs 方法。
-        此方法将阻塞，直到从共享文件队列中成功获取一个数据包，
-        然后将其准备好以用于训练。
-
-        原始的 'inputs' 参数（来自 dummy dataloader）被忽略。
-        """
-        # 调用 pop_from_fs_queue，它包含了轮询、原子重命名和反序列化逻辑
-        # 每个学习器进程都会在这里竞争可用的数据文件
-        mode = "train" if self.model.training else "eval"
-
-        if mode == "train":
-            rollout_batch = pop_from_fs_queue(
-                queue_dir=self.queue_dir,
-                processing_dir=self.processing_dir,
-                rank=self.rank,
-                timeout=self.queue_timeout
-            )
-
-            # 处理超时或队列为空的情况
-            if rollout_batch is None:
-                # 如果 pop_from_fs_queue 返回 None，说明在指定的超时时间内没有获取到任何数据。
-                # 这通常意味着采样器进程已经崩溃、卡死或速度远远跟不上学习器。
-                # 在这种情况下，我们应该让训练失败，而不是无限期地等待。
-                error_message = (
-                    f"[Rank {self.rank}] CRITICAL: Timed out after {self.queue_timeout} seconds "
-                    f"waiting for data from the file queue at '{self.queue_dir}'. "
-                    "The sampler process(es) might be down or stuck. Aborting training."
-                )
-                logger.error(error_message)
-                raise RuntimeError(error_message)
-
-            # 将从文件中加载的数据（目前在 CPU 上）移动到当前进程的 GPU 设备
-            try:
-                for key, value in rollout_batch.items():
-                    if isinstance(value, torch.Tensor):
-                        rollout_batch[key] = value.to(self.accelerator.device)
-            except Exception as e:
-                logger.error(f"[Rank {self.rank}] Failed to move batch to device. Error: {e}")
-                # 也可以在这里记录 batch 的 keys，以帮助调试
-                logger.error(f"Batch keys: {list(rollout_batch.keys())}")
-                raise e
-
-            self._metrics = rollout_batch["metrics"]
-
-            return rollout_batch
+    def _move_model_to_vllm(self):
+        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if zero_stage_3:
+            import deepspeed
+            # logger.info(f"sampler_script_v2_vllm.py line 150")
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
         else:
-            # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
-            inputs = self._generate_and_score_completions(inputs)
-            return inputs
+            gather_if_zero3 = nullcontext
+            # logger.info(f"sampler_script_v2_vllm.py line 154")
+        if is_peft_model(self.model):
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
+            # merging adapters in a sharded manner is not supported.
+            # TODO: does this work with FSDP?
+            with gather_if_zero3(list(self.model.parameters())):
+                self.model.merge_adapter()
 
-    def get_train_dataloader(self):
-        """
-        重写 get_train_dataloader 以创建一个 "dummy" 数据加载器。
-        它的唯一作用是驱动训练循环的步数。
-        """
-        if self.train_dataset is None:
-            raise ValueError("Trainer: training requires a train_dataset.")
+                # Update vLLM weights while parameters are gathered
+                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
+                    # Update vLLM weights while parameters are gathered
+                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                    self._sync_fsdp_params_to_vllm(self.model)
+                else:
+                    # DeepSpeed ZeRO-3 with PEFT
+                    for name, param in self.model.named_parameters():
+                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        if self.model.prefix in name:
+                            continue
+                        # When module to save, remove its prefix and discard the original module
+                        if "original_module" in name:
+                            continue
+                        name = name.replace("modules_to_save.default.", "")
 
-        # 创建一个只包含占位符的 IterableDataset
-        class DummyInfiniteIterableDataset(torch.utils.data.IterableDataset):
-            def __iter__(self):
-                while True: # 无限迭代
-                    yield {}
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
+                # Unmerge adapters while parameters are still gathered
+                self.model.unmerge_adapter()
+                # Parameters will automatically be repartitioned when exiting the context
+        else:
+            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
+            if self.is_fsdp_enabled:
+                self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                # logger.info(f"sampler_script_v2_vllm.py line 191")
+            else:
+                # logger.info(f"sampler_script_v2_vllm.py line 193")
+                for name, param in self.model.named_parameters():
+                    with gather_if_zero3([param]):
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
 
-        return torch.utils.data.DataLoader(
-            DummyInfiniteIterableDataset(),
-            batch_size=self.args.per_device_train_batch_size,
-        )
+        # Reset cache on vLLM
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            # logger.info(f"sampler_script_v2_vllm.py line 206")
+            self.vllm_client.reset_prefix_cache()
+        elif self.vllm_mode == "colocate":
+            # logger.info(f"sampler_script_v2_vllm.py line 209")
+            self.llm.reset_prefix_cache()
 
-
-    def _generate_and_score_completions(
+    def generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         max_gen = 20
@@ -302,9 +219,10 @@ class LearnerGPGTrainer(GPGTrainer):
         new_prompt_mask = None
         new_completion_ids = None
         new_completion_mask = None
+        mode = "train"  # 采样的数据用于训练  所以是 train
 
-        max_gen = 1 if not self.model.training else max_gen # to make validation work
-        mode = "train" if self.model.training else "eval"
+        max_gen = 1 if mode!= "train" else max_gen # to make validation work
+
         while n_gen <= max_gen:
             if n_gen == 1 and len(inputs) > 0: # the dataloader iter finishes, we need a new iter.
                 inputs = inputs
@@ -321,9 +239,7 @@ class LearnerGPGTrainer(GPGTrainer):
                     self._epoch_iterator = epoch_iterator
                     batch_samples, num_items_in_batch, end = self.get_local_batch_samples(epoch_iterator, 1)
                 inputs = batch_samples[0]
-
             prompts = [x["prompt"] for x in inputs]
-
             if isinstance(inputs[0]["prompt"], (list,)):
                 problems = [x["prompt"][-1]['content'] for x in inputs]
             else:
@@ -342,6 +258,7 @@ class LearnerGPGTrainer(GPGTrainer):
                 # prompt_mask = pad_sequence_to_length(prompt_mask, self.max_prompt_length, 0, left_pad=True)
 
             # Generate completions using either vLLM or regular generation
+            time_start = time.time()
             if self.args.use_vllm:
                 # First, have main process load weights if needed
                 if self.state.global_step != self._last_loaded_step:
@@ -349,41 +266,58 @@ class LearnerGPGTrainer(GPGTrainer):
                     self._last_loaded_step = self.state.global_step
 
                 # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-                all_prompts_text = gather_object(prompts_text)
-                if self.accelerator.is_main_process:
-                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                    # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                    with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                        )
+                if self.guided_decoding_regex:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
-                completion_ids = broadcast_object_list(completion_ids, from_process=0)
-                process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + 1) * len(prompts),
-                )
-                completion_ids = completion_ids[process_slice]
+                    guided_decoding = None
 
+                generation_kwargs = {
+                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                    "repetition_penalty": self.repetition_penalty,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                    "max_tokens": self.max_completion_length,
+                    "guided_decoding": guided_decoding,
+                }
+                if self.args.generation_kwargs is not None:
+                    generation_kwargs.update(self.args.generation_kwargs)
+                sampling_params = SamplingParams(**generation_kwargs)
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Gather prompts from all ranks in the TP group and flatten.
+                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
+                # print(f'>>>>>>>>>>>>generation_kwargs:{generation_kwargs}')
+                # print(f'>>>>>>>>>>>>self.args.generation_kwargs:{self.args.generation_kwargs}')
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+
+                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Slice completions for this rank within its TP group.
+                    # Each rank generates all outputs — we keep only our share.
+                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
                 # Pad the completions, and concatenate them with the prompts
                 completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
                 prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             else:
                 # Regular generation path
+                #print(f'>>>>>>>>>>>>prompt_ids:{prompt_ids}')
+                #print(f'>>>>>>>>>>>>attention_mask:{prompt_mask}')
+                #print(f'>>>>>>>>>>>>generation_config:{self.generation_config}')
+                # print(f'>>>>>>>>>>>>self.model_args:{self.model_args}')
+
                 with unwrap_model_for_generation(
                         self.model_wrapped, self.accelerator,
                         gather_deepspeed3_params=self.args.ds3_gather_for_generation
@@ -391,19 +325,28 @@ class LearnerGPGTrainer(GPGTrainer):
                     prompt_completion_ids = unwrapped_model.generate(
                         prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                     )
-
+                
+                #print(f'>>>>>>>>>>>>prompt_completion_ids:{prompt_completion_ids}')
+                #print(f'prompt_completion_ids.shape:{prompt_completion_ids.shape}')
                 # prompt_completion_ids = pad_sequence_to_length(prompt_completion_ids,
                 #                                                self.max_prompt_length+self.max_completion_length,
                 #                                                self.processing_class.pad_token_id, left_pad=False)
 
                 # Compute prompt length and extract completion ids
-                prompt_length = prompt_ids.size(1)
-                prompt_ids = prompt_completion_ids[:, :prompt_length]
-                completion_ids = prompt_completion_ids[:, prompt_length:]
-                # all_prompts_text = gather_object(prompts_text)
-                all_problems = gather_object(problems)
-                ordered_set_of_problems = all_problems[:: self.num_generations]
-                # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+            time_end = time.time()
+            # logger.info(f"prompt_completion_ids生成时长： {(time_end - time_start):.2f}s")
+            prompt_length = prompt_ids.size(1)
+            # logger.info(f"current rank:{self.rank}")
+            # logger.info(f"prompt_ids.shape:{prompt_ids.shape}")
+            # logger.info(f"prompt_ids:{prompt_ids}")
+            # logger.info(f"prompt_completion_ids.shape:{prompt_completion_ids.shape}")
+            # logger.info(f"prompt_completion_ids:{prompt_completion_ids}")
+            prompt_ids = prompt_completion_ids[:, :prompt_length]
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+            # all_prompts_text = gather_object(prompts_text)
+            all_problems = gather_object(problems)
+            ordered_set_of_problems = all_problems[:: self.num_generations]
+            # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
 
             # Mask everything after the first EOS token
             is_eos = completion_ids == self.processing_class.eos_token_id
@@ -479,6 +422,13 @@ class LearnerGPGTrainer(GPGTrainer):
                         keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                         reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                         output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                        logger.info("*"*50+"Q:")
+                        logger.info(f"prompts:{prompts}")
+                        logger.info("*"*50+"A:")
+                        logger.info(f"completions:{completions}")
+                        logger.info("*"*50+"Reward")
+                        logger.info(f"output_reward_func:{output_reward_func}")
+                        logger.info("*"*50)
                         # Convert None values to NaN
                         output_reward_func = [reward if reward is not None else torch.nan for reward in
                                               output_reward_func]
@@ -486,7 +436,7 @@ class LearnerGPGTrainer(GPGTrainer):
                         rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
             # If all reward functions return None for a given row, issue a detailed warning
-            mode = "train" if self.model.training else "eval"
+
 
             if torch.isnan(rewards_per_func).all(dim=1).any():
                 nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
@@ -505,7 +455,7 @@ class LearnerGPGTrainer(GPGTrainer):
             # Apply weights to each reward function's output and sum
             rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-            # Compute grouped-wise rewards #[N-PROMPT, 8]
+            # Compute grouped-wise rewards
             mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
 
             # calculate data weight based on acc reward
@@ -533,16 +483,14 @@ class LearnerGPGTrainer(GPGTrainer):
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
             )
-
-            my_rewards = rewards[process_slice] #16
-
-            my_rewards_stds = my_rewards.view(-1, self.num_generations).std(dim=1)#[2]
-            my_identical_value_mask = torch.where(my_rewards_stds == 0)[0] #[]
+            my_rewards = rewards[process_slice]
+            my_rewards_stds = my_rewards.view(-1, self.num_generations).std(dim=1)
+            my_identical_value_mask = torch.where(my_rewards_stds == 0)[0]
             my_valid_value_mask = torch.where(my_rewards_stds > 0)[0]
-            num_questions = len(prompts) // self.num_generations #2
+            num_questions = len(prompts) // self.num_generations
             _b_valid = my_valid_value_mask.shape[0] * self.num_generations
             _b_ident = my_identical_value_mask.shape[0] * self.num_generations
-            assert _b_ident + _b_valid == len(prompts) # 8
+            assert _b_ident + _b_valid == len(prompts)
 
             if _b_valid > 0:
                 valid_rewards = my_rewards.reshape(num_questions, self.num_generations)[my_valid_value_mask].reshape(_b_valid)
@@ -569,46 +517,38 @@ class LearnerGPGTrainer(GPGTrainer):
                 identical_rewards, identical_prompt_ids, identical_prompt_mask, identical_completion_ids, identical_completion_mask = [None] * 5
 
             new_rewards = merge(valid_rewards, new_rewards)
-
             new_prompt_mask = merge_with_padding(valid_prompt_mask, new_prompt_mask, 0, left_pad=True)
             new_prompt_ids = merge_with_padding(valid_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)
             new_completion_mask = merge_with_padding(valid_completion_mask, new_completion_mask, 0, left_pad=False)
             new_completion_ids = merge_with_padding(valid_completion_ids, new_completion_ids, self.processing_class.pad_token_id, left_pad=False)
 
-            if n_valid_samples < self.args.min_inverse_alpha * num_samples and mode == "train": # 加了  and mode == "train"
-                logger.info(f"keep generating more examples: the {n_gen}-th mini-batch")
+            if n_valid_samples < self.args.min_inverse_alpha * num_samples:
+                logger.info(f"keep generating more examples: the {n_gen}-th mini-batch, n_valid_samples:{n_valid_samples}<{self.args.min_inverse_alpha} * {num_samples} ")
+                # 这里可以考虑改变超参数
                 n_gen += 1
 
-            # else:
-            #     # 重新组装样本batch
-            #     merge_rewards = merge(identical_rewards, new_rewards)
-            #     rewards =merge_rewards[:len(prompts)]
-            #     prompt_ids = merge_with_padding(identical_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
-            #     prompt_mask = merge_with_padding(identical_prompt_mask, new_prompt_mask, 0, left_pad=True)[:len(prompts)]
-            #     completion_ids = merge_with_padding(identical_completion_ids, new_completion_ids, self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
-            #     completion_mask = merge_with_padding(identical_completion_mask, new_completion_mask, 0, left_pad=False)[:len(prompts)]
-            #     break
             else:
                 # 重新组装样本batch
-                merge_rewards = merge(new_rewards,identical_rewards)
+                merge_rewards = merge(identical_rewards, new_rewards)
                 rewards =merge_rewards[:len(prompts)]
-                prompt_ids = merge_with_padding(new_prompt_ids, identical_prompt_ids,  self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
-                prompt_mask = merge_with_padding(new_prompt_mask, identical_prompt_mask, 0, left_pad=True)[:len(prompts)]
-                completion_ids = merge_with_padding( new_completion_ids, identical_completion_ids,self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
-                completion_mask = merge_with_padding( new_completion_mask,identical_completion_mask, 0, left_pad=False)[:len(prompts)]
+                prompt_ids = merge_with_padding(identical_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
+                prompt_mask = merge_with_padding(identical_prompt_mask, new_prompt_mask, 0, left_pad=True)[:len(prompts)]
+                completion_ids = merge_with_padding(identical_completion_ids, new_completion_ids, self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
+                completion_mask = merge_with_padding(identical_completion_mask, new_completion_mask, 0, left_pad=False)[:len(prompts)]
                 break
-        if self.model.training:
+
+
+        if mode=="train":
             assert n_gen < max_gen
 
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)#[8]
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)#[8]
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         g_mean_grouped_rewards = mean_grouped_rewards
         g_std_grouped_rewards = std_grouped_rewards
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)#[8] -> [64]
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = rewards - mean_grouped_rewards ##[16] -> [64]
-
+        advantages = rewards - mean_grouped_rewards
         if self.args.scale_rewards:
             advantages = advantages / (std_grouped_rewards + 1e-4)
 
@@ -640,35 +580,34 @@ class LearnerGPGTrainer(GPGTrainer):
         self._metrics[mode]['inverse_alpha'].append(inverse_alpha)
         self._metrics[mode]['num_easy_problem'].append(num_easy_problem)
         self._metrics[mode]['num_hard_problem'].append(num_hard_problem)
+        self._metrics[mode]['model_ids'].append(self.model_ids)
 
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
+        # print(f" wandb.run is not None={ wandb.run is not None} self.batch_ids={self.batch_ids}, self.log_completions={self.log_completions}, self.accelerator.is_main_process={self.accelerator.is_main_process}")
+
+        if self.log_completions:
             prompts_to_log = gather_object(prompts_text)
             completions_to_log = gather_object(completions_text)
-            rewards_to_log = gather_object(rewards)
-
+            rewards = gather(rewards)
             if self.accelerator.is_main_process:
-                # if is_rich_available():
-                #     print_prompt_completions_sample(
-                #         prompts_to_log,
-                #         completions_to_log,
-                #         rewards_to_log,
-                #         self.state.global_step,
-                #     )
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
                     import pandas as pd
 
                     # For logging
                     table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
+                        "model_sync_times": [str(self.model_ids)]* len(rewards),
+                        "step": [str(self.batch_ids)] * len(rewards),
                         "prompt": prompts_to_log,
                         "completion": completions_to_log,
-                        "reward": rewards_to_log.tolist(),
+                        "reward": rewards.tolist(),
                     }
 
+                    # print(f"table is done (sampler_script_v2.py)")
                     # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+        self.batch_ids+=1
 
         return {
             "prompt_ids": prompt_ids,
@@ -678,11 +617,94 @@ class LearnerGPGTrainer(GPGTrainer):
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
+            "metrics": self._metrics,
         }
+
+
+    def _sync_model_weights(self):
+        """检查并加载学习器分享的最新模型权重。"""
+        if not self.sync_weights_path.exists():
+            return
+
+        try:
+            current_mtime = self.sync_weights_path.stat().st_mtime
+            if current_mtime > self.last_sync_time:
+                logger.info(f"[Sampler Rank-{self.rank}] Detected new weights from {self.sync_weights_path}. Loading...")
+                state_dict = torch.load(self.sync_weights_path, map_location="cpu")
+                self.model.load_state_dict(state_dict)
+                self._move_model_to_vllm()
+                self.last_sync_time = current_mtime
+                self.model_ids += 1
+                logger.info(f"[Sampler Rank-{self.rank}] New weights loaded successfully. model_ids:{self.model_ids-1}->{self.model_ids}")
+
+        except FileNotFoundError:
+            # 文件可能在检查存在性和获取 stat 之间被删除，忽略即可
+            pass
+        except Exception as e:
+            logger.error(f"[Sampler] Rank-{self.rank} Error loading weights: {e}")
+            # 等待一小会儿，防止因文件正在写入而出错时频繁重试
+            time.sleep(1)
+
+    def _get_next_batch(self):
+        """封装获取下一批数据的逻辑，包括自动重置数据迭代器。"""
+        try:
+            return next(self._epoch_iterator)
+        except StopIteration:
+            logger.info(f"[Sampler] Rank-{self.rank} Dataset depleted. Re-creating dataloader iterator.")
+            self._epoch_iterator = iter(self._dataloader)
+            return next(self._epoch_iterator)
+
+    def run_sampling_loop(self):
+        """
+        启动并运行主采样循环。
+        这个循环会持续生成数据，直到进程被外部终止。
+        """
+        logger.info(f"*** Starting Sampler Loop (PID: {os.getpid()}) on device: {self.accelerator.device} ***")
+        batch_counter = 0
+        while True:
+            # 1. 同步模型
+            self._sync_model_weights()
+            # logger.info(f"# 1. 同步模型 完成")
+
+            # 2. 获取下一批 prompt
+            batch = self._get_next_batch()
+            # logger.info(f"# 2. 获取下一批 prompt 完成")
+
+            # 3. 生成和评分
+            with torch.no_grad():
+                # GPGTrainer 的内部逻辑可能依赖 self.control
+                self.control = TrainerControl()
+                time_start = time.time()
+                rollout_data = self.generate_and_score_completions(batch)
+                time_end = time.time()
+                # logger.info(f"rollout_data生成时长： {time_end - time_start}")
+            # logger.info(f"# 3. 生成和评分 完成")
+
+            # 4. 将结果写入文件队列
+            cpu_rollout_data = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in rollout_data.items()}
+            push_to_fs_queue(self.queue_dir, cpu_rollout_data)
+            # logger.info(f"# 4. 将结果写入文件队列 完成")
+
+            # 5. 日志记录
+            batch_counter += 1
+            if batch_counter % self.log_interval == 0:
+                queue_size = len(list(self.queue_dir.glob("data_*.pt")))
+                logger.info(f"[Sampler] Rank-{self.rank} Generated and wrote batch #{batch_counter}. Approximate queue size: {queue_size} ")
+                logger.info(f"字段： {rollout_data.keys()}")
+            # logger.info(f"# 5. 日志记录 完成")
+
+
+
+# =================================================================================
+# 主函数
+# =================================================================================
 
 def main(script_args, training_args, model_args):
     # Set seed for reproducibility
-    set_seed(training_args.seed)
+    rank =training_args.local_rank
+    seed= int((rank+1)*(int(time.time()*1000)%365))
+    training_args.seed = seed
+    set_seed(seed)
 
     ###############
     # Setup logging
@@ -704,6 +726,7 @@ def main(script_args, training_args, model_args):
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
         + f" distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
+    logger.info(f"[Rank={rank}] Random seed {seed}")
     logger.info(f"Model parameters {model_args}")
     logger.info(f"Script parameters {script_args}")
     logger.info(f"Training parameters {training_args}")
@@ -717,7 +740,15 @@ def main(script_args, training_args, model_args):
 
     if "wandb" in training_args.report_to:
         init_wandb_training(training_args)
-
+        if rank==0:
+            current_file_path = __file__
+            current_file_name = os.path.basename(current_file_path)
+            wandb.login()
+            wandb.init(project=os.environ["WANDB_PROJECT"],
+                       entity = os.environ["WANDB_ENTITY"],
+                       # config=dict(training_args),
+                       name=current_file_name,
+                       )
 
     ################
     # Load tokenizer
@@ -746,10 +777,10 @@ def main(script_args, training_args, model_args):
         prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
 
-    def make_conversation_math35(example):
+    def make_conversation_math35(example,add_think=True):
         prompt = []
         # prompt.append({"role": "user", "content": example["instruction"][0]['content']})
-        prompt = example["instruction"]
+        prompt = example["instruction"]+" /no_think" if not add_think else example["instruction"]+" /think"
         # prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
 
@@ -775,39 +806,19 @@ def main(script_args, training_args, model_args):
     )
     training_args.model_init_kwargs = model_kwargs
 
-    #############################
-    # Initialize the GRPO trainer
-    #############################
-    if training_args.eval_strategy == "no":
-        eval_dataset = None
-    else:
-        if training_args.weighted_sample:
-            eval_dataset = dataset[script_args.dataset_train_split]
-        else:
-            eval_dataset = dataset[script_args.dataset_test_split]
+    fs_queue_path = os.getenv("FS_QUEUE_PATH", "/extrahome0/save_dir/GPG/4gpus/Async/Qwen3-0.6B")
 
-    trainer = LearnerGPGTrainer(
+    trainer = SamplerGPGTrainer(
         model=model_args.model_name_or_path,
         reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=eval_dataset,
+        eval_dataset=None,
         peft_config=get_peft_config(model_args),
         callbacks=get_callbacks(training_args, model_args),
         processing_class=tokenizer,
+        fs_queue_path=fs_queue_path
     )
-
-    # 添加用于模型同步的回调
-    sync_weights_path = Path(os.getenv("SYNC_WEIGHTS_PATH", "/tmp/Qwen3-0.6B/gpg_async_weights.pt"))
-    sync_steps = int(os.getenv("SYNC_SAMPLER_STEPS", "1"))
-
-    # 将 trainer 实例自身传递给回调的构造函数
-    sync_callback = SamplerSyncCallback(
-        trainer=trainer,
-        sync_weights_path=sync_weights_path,
-        sync_steps=sync_steps
-    )
-    trainer.add_callback(sync_callback)
 
     class ResetDataLoader(TrainerCallback):
         trainer = None
@@ -826,54 +837,9 @@ def main(script_args, training_args, model_args):
     ###############
     # Training loop
     ###############
-    logger.info("*** Starting Learner Training Loop ***")
-    checkpoint = None
-    if training_args.resume_from_checkpoint is not None:
-        checkpoint = training_args.resume_from_checkpoint
-    elif last_checkpoint is not None:
-        checkpoint = last_checkpoint
-    train_result = trainer.train(resume_from_checkpoint=checkpoint)
-    metrics = train_result.metrics
-    metrics["train_samples"] = len(dataset[script_args.dataset_train_split])
-    trainer.log_metrics("train", metrics)
-    trainer.save_metrics("train", metrics)
-    trainer.save_state()
-
-    ##################################
-    # Save model and create model card
-    ##################################
-    logger.info("*** Save model ***")
-    trainer.save_model(training_args.output_dir)
-    logger.info(f"Model saved to {training_args.output_dir}")
-
-    # Save everything else on main process
-    kwargs = {
-        "dataset_name": script_args.dataset_name,
-        "tags": ["open-r1"],
-    }
-    if trainer.accelerator.is_main_process:
-        trainer.create_model_card(**kwargs)
-        # Restore k,v cache for fast inference
-        trainer.model.config.use_cache = True
-        trainer.model.config.save_pretrained(training_args.output_dir)
-
-    ##########
-    # Evaluate
-    ##########
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate()
-        metrics["eval_samples"] = len(dataset[script_args.dataset_test_split])
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    #############
-    # push to hub
-    #############
-    if training_args.push_to_hub:
-        logger.info("Pushing to hub...")
-        trainer.push_to_hub(**kwargs)
-
+    logger.info("*** Starting Sampler Sampling Loop ***")
+    # 启动采样循环
+    trainer.run_sampling_loop()
 
 
 

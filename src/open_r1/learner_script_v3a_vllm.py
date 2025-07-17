@@ -27,9 +27,9 @@ from transformers import (
 )
 from transformers.utils import is_peft_available
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from trl.import_utils import is_rich_available, is_vllm_available
+from trl.import_utils import  is_vllm_available
 from trl.models import  unwrap_model_for_generation
-from trl.trainer.grpo_trainer import RepeatRandomSampler
+from trl.trainer.grpo_trainer import RepeatSampler
 from trl.trainer.utils import (
     pad,
     print_prompt_completions_sample,
@@ -57,15 +57,111 @@ from open_r1.utils import get_tokenizer
 from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
-from open_r1.gpg_trainer import GPGTrainer
+from open_r1.gpg_trainer_vllm import GPGTrainer
 from open_r1.utils.data_utils import custom_loading_dataset
 from transformers import TrainerCallback
 from pathlib import Path
 from async_utils import setup_fs_queue, pop_from_fs_queue,SamplerSyncCallback # 新增
 from trl.extras.profiling import profiling_decorator, profiling_context
+from transformers.utils import is_rich_available
 from typing import Any, Callable, Optional, Union
 from typing import Dict, Any, Union
 import torch.nn.functional as F
+
+import time
+from transformers.training_args import OptimizerNames, ParallelMode, TrainingArguments
+
+from transformers.utils import (
+    ADAPTER_CONFIG_NAME,
+    ADAPTER_SAFE_WEIGHTS_NAME,
+    ADAPTER_WEIGHTS_NAME,
+    CONFIG_NAME,
+    SAFE_WEIGHTS_INDEX_NAME,
+    SAFE_WEIGHTS_NAME,
+    WEIGHTS_INDEX_NAME,
+    WEIGHTS_NAME,
+    XLA_FSDPV2_MIN_VERSION,
+    PushInProgress,
+    PushToHubMixin,
+    can_return_loss,
+    check_torch_load_is_safe,
+    find_labels,
+    is_accelerate_available,
+    is_apex_available,
+    is_apollo_torch_available,
+    is_bitsandbytes_available,
+    is_datasets_available,
+    is_galore_torch_available,
+    is_grokadamw_available,
+    is_in_notebook,
+    is_ipex_available,
+    is_liger_kernel_available,
+    is_lomo_available,
+    is_peft_available,
+    is_safetensors_available,
+    is_sagemaker_dp_enabled,
+    is_sagemaker_mp_enabled,
+    is_schedulefree_available,
+    is_torch_hpu_available,
+    is_torch_mlu_available,
+    is_torch_mps_available,
+    is_torch_musa_available,
+    is_torch_neuroncore_available,
+    is_torch_npu_available,
+    is_torch_xla_available,
+    is_torch_xpu_available,
+    is_torchao_available,
+    logging,
+    strtobool,
+)
+from packaging import version
+from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+from torch.utils.data import DataLoader, Dataset, IterableDataset, RandomSampler, SequentialSampler
+
+#################################################################################################################
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+    from smdistributed.modelparallel import __version__ as SMP_VERSION
+
+    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+
+    from transformers.trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
+else:
+    IS_SAGEMAKER_MP_POST_1_10 = False
+
+if is_accelerate_available():
+    from accelerate import Accelerator, skip_first_batches
+    from accelerate import __version__ as accelerate_version
+    from accelerate.state import AcceleratorState
+    from accelerate.utils import (
+        AutocastKwargs,
+        DistributedDataParallelKwargs,
+        DistributedType,
+        load_fsdp_model,
+        load_fsdp_optimizer,
+        save_fsdp_model,
+        save_fsdp_optimizer,
+    )
+
+    DATA_SAMPLERS = [RandomSampler]
+    if version.parse(accelerate_version) > version.parse("1.3.0"):
+        from accelerate.utils import TorchTensorParallelPlugin
+    if version.parse(accelerate_version) > version.parse("0.23.0"):
+        from accelerate.data_loader import SeedableRandomSampler
+
+        DATA_SAMPLERS += [SeedableRandomSampler]
+
+    if is_deepspeed_available():
+        from accelerate.utils import DeepSpeedSchedulerWrapper
+#################################################################################################################
+
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -218,6 +314,88 @@ class LearnerGPGTrainer(GPGTrainer):
 
         return loss
 
+    @profiling_decorator
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch=None
+    ) -> torch.Tensor:
+        """
+        Perform a training step on a batch of inputs.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to train.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+
+        Return:
+            `torch.Tensor`: The tensor with training loss on this batch.
+        """
+        model.train()
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self.optimizer.train()
+
+        inputs = self._prepare_inputs(inputs)
+        if is_sagemaker_mp_enabled():
+            loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
+            return loss_mb.reduce_mean().detach().to(self.args.device)
+
+        with self.compute_loss_context_manager():
+            loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+
+        del inputs
+        if (
+            self.args.torch_empty_cache_steps is not None
+            and self.state.global_step % self.args.torch_empty_cache_steps == 0
+        ):
+            if is_torch_xpu_available():
+                torch.xpu.empty_cache()
+            elif is_torch_mlu_available():
+                torch.mlu.empty_cache()
+            elif is_torch_musa_available():
+                torch.musa.empty_cache()
+            elif is_torch_npu_available():
+                torch.npu.empty_cache()
+            elif is_torch_mps_available():
+                torch.mps.empty_cache()
+            elif is_torch_hpu_available():
+                logger.warning(
+                    "`torch_empty_cache_steps` is set but HPU device/backend does not support empty_cache()."
+                )
+            else:
+                torch.cuda.empty_cache()
+
+        kwargs = {}
+
+        # For LOMO optimizers you need to explicitly use the learnign rate
+        if self.args.optim in [OptimizerNames.LOMO, OptimizerNames.ADALOMO]:
+            kwargs["learning_rate"] = self._get_learning_rate()
+
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            # Finally we need to normalize the loss for reporting if GA loss bug is not fixed during compute loss
+            if not self.model_accepts_loss_kwargs and self.compute_loss_func is None:
+                loss = loss / self.args.gradient_accumulation_steps
+
+            # Turning off loss scaling w.r.t. gradient accumulation when DeepSpeed is enabled
+            # https://github.com/huggingface/transformers/pull/35808
+            if self.accelerator.distributed_type == DistributedType.DEEPSPEED:
+                kwargs["scale_wrt_gas"] = False
+
+            self.accelerator.backward(loss, **kwargs)
+
+            return loss.detach()
+
+    @profiling_decorator
     def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> Dict[str, Union[torch.Tensor, Any]]:
         """
         重写 _prepare_inputs 方法。
@@ -289,7 +467,7 @@ class LearnerGPGTrainer(GPGTrainer):
             batch_size=self.args.per_device_train_batch_size,
         )
 
-
+    @profiling_decorator
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
@@ -323,6 +501,7 @@ class LearnerGPGTrainer(GPGTrainer):
                 inputs = batch_samples[0]
 
             prompts = [x["prompt"] for x in inputs]
+            # logger.info(f'len(prompts):{len(prompts)}')
 
             if isinstance(inputs[0]["prompt"], (list,)):
                 problems = [x["prompt"][-1]['content'] for x in inputs]
@@ -340,8 +519,73 @@ class LearnerGPGTrainer(GPGTrainer):
                 prompt_mask = prompt_mask[:, -self.max_prompt_length:]
                 # prompt_ids = pad_sequence_to_length(prompt_ids, self.max_prompt_length, self.processing_class.pad_token_id, left_pad=True)
                 # prompt_mask = pad_sequence_to_length(prompt_mask, self.max_prompt_length, 0, left_pad=True)
+            #
+            # # Generate completions using either vLLM or regular generation
+            # if self.args.use_vllm:
+            #     # First, have main process load weights if needed
+            #     if self.state.global_step != self._last_loaded_step:
+            #         self._move_model_to_vllm()
+            #         self._last_loaded_step = self.state.global_step
+            #
+            #     # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+            #     all_prompts_text = gather_object(prompts_text)
+            #     if self.accelerator.is_main_process:
+            #         # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+            #         # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+            #         # prompt individually.
+            #         ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+            #         with profiling_context(self, "vLLM.generate"):
+            #             completion_ids = self.vllm_client.generate(
+            #                 prompts=ordered_set_of_prompts,
+            #                 n=self.num_generations,
+            #                 repetition_penalty=self.repetition_penalty,
+            #                 temperature=self.temperature,
+            #                 top_p=self.top_p,
+            #                 top_k=-1 if self.top_k is None else self.top_k,
+            #                 min_p=0.0 if self.min_p is None else self.min_p,
+            #                 max_tokens=self.max_completion_length,
+            #                 guided_decoding_regex=self.guided_decoding_regex,
+            #             )
+            #     else:
+            #         completion_ids = [None] * len(all_prompts_text)
+            #     # Broadcast the completions from the main process to all processes, ensuring each process receives its
+            #     # corresponding slice.
+            #     completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            #     process_slice = slice(
+            #         self.accelerator.process_index * len(prompts),
+            #         (self.accelerator.process_index + 1) * len(prompts),
+            #     )
+            #     completion_ids = completion_ids[process_slice]
+            #
+            #     # Pad the completions, and concatenate them with the prompts
+            #     completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            #     completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            #     prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            # else:
+            #     # Regular generation path
+            #     with unwrap_model_for_generation(
+            #             self.model_wrapped, self.accelerator,
+            #             gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            #     ) as unwrapped_model:
+            #         prompt_completion_ids = unwrapped_model.generate(
+            #             prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+            #         )
+            #
+            #     # prompt_completion_ids = pad_sequence_to_length(prompt_completion_ids,
+            #     #                                                self.max_prompt_length+self.max_completion_length,
+            #     #                                                self.processing_class.pad_token_id, left_pad=False)
+            #
+            #     # Compute prompt length and extract completion ids
+            #     prompt_length = prompt_ids.size(1)
+            #     prompt_ids = prompt_completion_ids[:, :prompt_length]
+            #     completion_ids = prompt_completion_ids[:, prompt_length:]
+            #     # all_prompts_text = gather_object(prompts_text)
+            #     all_problems = gather_object(problems)
+            #     ordered_set_of_problems = all_problems[:: self.num_generations]
+            #     # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
 
             # Generate completions using either vLLM or regular generation
+            time_start = time.time()
             if self.args.use_vllm:
                 # First, have main process load weights if needed
                 if self.state.global_step != self._last_loaded_step:
@@ -349,41 +593,58 @@ class LearnerGPGTrainer(GPGTrainer):
                     self._last_loaded_step = self.state.global_step
 
                 # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-                all_prompts_text = gather_object(prompts_text)
-                if self.accelerator.is_main_process:
-                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                    # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                    with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                        )
+                if self.guided_decoding_regex:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
-                completion_ids = broadcast_object_list(completion_ids, from_process=0)
-                process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + 1) * len(prompts),
-                )
-                completion_ids = completion_ids[process_slice]
+                    guided_decoding = None
 
+                generation_kwargs = {
+                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                    "repetition_penalty": self.repetition_penalty,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                    "max_tokens": self.max_completion_length,
+                    "guided_decoding": guided_decoding,
+                }
+                if self.args.generation_kwargs is not None:
+                    generation_kwargs.update(self.args.generation_kwargs)
+                sampling_params = SamplingParams(**generation_kwargs)
+                print(f'>>>>>>>>>>>>generation_kwargs:{generation_kwargs}')
+                print(f'>>>>>>>>>>>>self.args.generation_kwargs:{self.args.generation_kwargs}')
+                if self.vllm_tensor_parallel_size > 1:
+                    # Gather prompts from all ranks in the TP group and flatten.
+                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
+
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+
+                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Slice completions for this rank within its TP group.
+                    # Each rank generates all outputs — we keep only our share.
+                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
                 # Pad the completions, and concatenate them with the prompts
                 completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
                 prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             else:
                 # Regular generation path
+                # print(f'>>>>>>>>>>>>prompt_ids:{prompt_ids}')
+                # print(f'>>>>>>>>>>>>attention_mask:{prompt_mask}')
+                # print(f'>>>>>>>>>>>>generation_config:{self.generation_config}')
+                print(f'>>>>>>>>>>>>self.model_args:{self.model_args}')
+
                 with unwrap_model_for_generation(
                         self.model_wrapped, self.accelerator,
                         gather_deepspeed3_params=self.args.ds3_gather_for_generation
@@ -392,18 +653,28 @@ class LearnerGPGTrainer(GPGTrainer):
                         prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                     )
 
+                # print(f'>>>>>>>>>>>>prompt_completion_ids:{prompt_completion_ids}')
+                # print(f'prompt_completion_ids.shape:{prompt_completion_ids.shape}')
                 # prompt_completion_ids = pad_sequence_to_length(prompt_completion_ids,
                 #                                                self.max_prompt_length+self.max_completion_length,
                 #                                                self.processing_class.pad_token_id, left_pad=False)
 
                 # Compute prompt length and extract completion ids
-                prompt_length = prompt_ids.size(1)
-                prompt_ids = prompt_completion_ids[:, :prompt_length]
-                completion_ids = prompt_completion_ids[:, prompt_length:]
-                # all_prompts_text = gather_object(prompts_text)
-                all_problems = gather_object(problems)
-                ordered_set_of_problems = all_problems[:: self.num_generations]
-                # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+            time_end = time.time()
+            # logger.info(f"prompt_completion_ids生成时长： {(time_end - time_start):.2f}s")
+            prompt_length = prompt_ids.size(1)
+            # logger.info(f"current rank:{self.rank}")
+            # logger.info(f"prompt_ids.shape:{prompt_ids.shape}")
+            # logger.info(f"prompt_ids:{prompt_ids}")
+            # logger.info(f"prompt_completion_ids.shape:{prompt_completion_ids.shape}")
+            # logger.info(f"prompt_completion_ids:{prompt_completion_ids}")
+            prompt_ids = prompt_completion_ids[:, :prompt_length]
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+            # all_prompts_text = gather_object(prompts_text)
+            all_problems = gather_object(problems)
+            ordered_set_of_problems = all_problems[:: self.num_generations]
+            # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+
 
             # Mask everything after the first EOS token
             is_eos = completion_ids == self.processing_class.eos_token_id
@@ -524,6 +795,7 @@ class LearnerGPGTrainer(GPGTrainer):
             num_easy_problem = easy_mask.sum().item()
             num_hard_problem = hard_mask.sum().item()
             num_samples = stds.numel()
+            # logger.info(f'num_samples:{num_samples}')
 
             # 判断是否符合min_inverse_alpha要求，如果不符合，继续取样本；如果符合，进入后续计算。
             n_valid_samples += num_samples - num_identical_reward_groups
@@ -579,24 +851,16 @@ class LearnerGPGTrainer(GPGTrainer):
                 logger.info(f"keep generating more examples: the {n_gen}-th mini-batch")
                 n_gen += 1
 
-            # else:
-            #     # 重新组装样本batch
-            #     merge_rewards = merge(identical_rewards, new_rewards)
-            #     rewards =merge_rewards[:len(prompts)]
-            #     prompt_ids = merge_with_padding(identical_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
-            #     prompt_mask = merge_with_padding(identical_prompt_mask, new_prompt_mask, 0, left_pad=True)[:len(prompts)]
-            #     completion_ids = merge_with_padding(identical_completion_ids, new_completion_ids, self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
-            #     completion_mask = merge_with_padding(identical_completion_mask, new_completion_mask, 0, left_pad=False)[:len(prompts)]
-            #     break
             else:
                 # 重新组装样本batch
-                merge_rewards = merge(new_rewards,identical_rewards)
+                merge_rewards = merge(identical_rewards, new_rewards)
                 rewards =merge_rewards[:len(prompts)]
-                prompt_ids = merge_with_padding(new_prompt_ids, identical_prompt_ids,  self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
-                prompt_mask = merge_with_padding(new_prompt_mask, identical_prompt_mask, 0, left_pad=True)[:len(prompts)]
-                completion_ids = merge_with_padding( new_completion_ids, identical_completion_ids,self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
-                completion_mask = merge_with_padding( new_completion_mask,identical_completion_mask, 0, left_pad=False)[:len(prompts)]
+                prompt_ids = merge_with_padding(identical_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
+                prompt_mask = merge_with_padding(identical_prompt_mask, new_prompt_mask, 0, left_pad=True)[:len(prompts)]
+                completion_ids = merge_with_padding(identical_completion_ids, new_completion_ids, self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
+                completion_mask = merge_with_padding(identical_completion_mask, new_completion_mask, 0, left_pad=False)[:len(prompts)]
                 break
+
         if self.model.training:
             assert n_gen < max_gen
 
@@ -644,7 +908,7 @@ class LearnerGPGTrainer(GPGTrainer):
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log = gather_object(prompts_text)
             completions_to_log = gather_object(completions_text)
-            rewards_to_log = gather_object(rewards)
+            rewards = gather(rewards)
 
             if self.accelerator.is_main_process:
                 # if is_rich_available():
@@ -662,7 +926,7 @@ class LearnerGPGTrainer(GPGTrainer):
                         "step": [str(self.state.global_step)] * len(rewards),
                         "prompt": prompts_to_log,
                         "completion": completions_to_log,
-                        "reward": rewards_to_log.tolist(),
+                        "reward": rewards.tolist(),
                     }
 
                     # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
@@ -746,10 +1010,10 @@ def main(script_args, training_args, model_args):
         prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
 
-    def make_conversation_math35(example):
+    def make_conversation_math35(example,add_think=True):
         prompt = []
         # prompt.append({"role": "user", "content": example["instruction"][0]['content']})
-        prompt = example["instruction"]
+        prompt = example["instruction"]+" /no_think" if not add_think else example["instruction"]+" /think"
         # prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
 
@@ -830,8 +1094,8 @@ def main(script_args, training_args, model_args):
     checkpoint = None
     if training_args.resume_from_checkpoint is not None:
         checkpoint = training_args.resume_from_checkpoint
-    elif last_checkpoint is not None:
-        checkpoint = last_checkpoint
+    #elif last_checkpoint is not None:
+    #    checkpoint = last_checkpoint
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
     metrics = train_result.metrics
     metrics["train_samples"] = len(dataset[script_args.dataset_train_split])

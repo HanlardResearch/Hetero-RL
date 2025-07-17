@@ -140,6 +140,20 @@ class SamplerSyncCallback(TrainerCallback):
                 #   - exist_ok=True: 如果目录已经存在，不会报错
                 temp_path.parent.mkdir(parents=True, exist_ok=True)
 
+                # # 检查最后层前 5 个 key
+                # state_dict = unwrapped_model.state_dict()
+                # if unwrapped_model.state_dict():
+                #     validation_keys = list(state_dict.keys())[-5:]
+                #     for key in validation_keys:
+                #         print(f"\n>>>>>>>>>> 检查层：{key}")
+                #         weight_tensor = state_dict[key]
+                #         weight_cpu = weight_tensor.cpu().detach().flatten()
+                        
+                #         # 取前5个值（对大的权重矩阵只显示开头）
+                #         sample_size = min(5, weight_cpu.numel())
+                #         print(f"采样值: {weight_cpu[:sample_size].tolist()}")
+                # # 现在可以安全地保存了
+                # torch.save(state_dict, temp_path)
                 # 现在可以安全地保存了
                 torch.save(unwrapped_model.state_dict(), temp_path)
 

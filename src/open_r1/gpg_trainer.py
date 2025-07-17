@@ -188,6 +188,7 @@ class GPGTrainer(GRPOTrainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
+        # args.vllm_mode = "colocate"
         super().__init__(model, reward_funcs, args, train_dataset, eval_dataset, processing_class, reward_processing_classes, callbacks,
                          optimizers,peft_config)
         self.scale_batch = args.scale_batch

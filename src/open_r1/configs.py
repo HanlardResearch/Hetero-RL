@@ -26,6 +26,7 @@ class GRPOConfig(trl.GRPOConfig):
     args for callbacks, benchmarks etc
     """
 
+    # vllm_mode: Optional[str] = field(default="colocate", metadata={"help": "Vllm mode to consume."})
     benchmarks: list[str] = field(
         default_factory=lambda: [], metadata={"help": "The benchmarks to run after training."}
     )

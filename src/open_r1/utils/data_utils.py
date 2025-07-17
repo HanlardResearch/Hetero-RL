@@ -123,8 +123,10 @@ def custom_loading_dataset(dataset_name, train_name='train.parquet', test_name='
 
     # 重命名列
     train_data.rename(columns=column_mapping, inplace=True)
+
     if test_data is not None:
         test_data.rename(columns=column_mapping, inplace=True)
+
 
     # 计算每个样本的长度
     train_data['length'] = train_data['instruction'].apply(get_length)

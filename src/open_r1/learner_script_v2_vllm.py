@@ -331,6 +331,7 @@ class LearnerGPGTrainer(GPGTrainer):
                 inputs = batch_samples[0]
 
             prompts = [x["prompt"] for x in inputs]
+            logger.info(f'len(prompts):{len(prompts)}')
 
             if isinstance(inputs[0]["prompt"], (list,)):
                 problems = [x["prompt"][-1]['content'] for x in inputs]
@@ -440,7 +441,8 @@ class LearnerGPGTrainer(GPGTrainer):
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
-
+                print(f'>>>>>>>>>>>>generation_kwargs:{generation_kwargs}')
+                print(f'>>>>>>>>>>>>self.args.generation_kwargs:{self.args.generation_kwargs}')
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
@@ -623,6 +625,7 @@ class LearnerGPGTrainer(GPGTrainer):
             num_easy_problem = easy_mask.sum().item()
             num_hard_problem = hard_mask.sum().item()
             num_samples = stds.numel()
+            logger.info(f'num_samples:{num_samples}')
 
             # 判断是否符合min_inverse_alpha要求，如果不符合，继续取样本；如果符合，进入后续计算。
             n_valid_samples += num_samples - num_identical_reward_groups
@@ -921,8 +924,8 @@ def main(script_args, training_args, model_args):
     checkpoint = None
     if training_args.resume_from_checkpoint is not None:
         checkpoint = training_args.resume_from_checkpoint
-    elif last_checkpoint is not None:
-        checkpoint = last_checkpoint
+    #elif last_checkpoint is not None:
+    #    checkpoint = last_checkpoint
     train_result = trainer.train(resume_from_checkpoint=checkpoint)
     metrics = train_result.metrics
     metrics["train_samples"] = len(dataset[script_args.dataset_train_split])
