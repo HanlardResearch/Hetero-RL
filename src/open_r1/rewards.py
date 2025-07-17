@@ -63,7 +63,7 @@ def accuracy_reward(completions, solution, **kwargs):
         else:
             # If the gold solution is not parseable, we reward 1 to skip this example
             reward = 1.0
-            print("Failed to parse gold solution: ", sol)
+            print("accuracy_reward: Failed to parse gold solution: ", sol)
         rewards.append(reward)
 
     return rewards
@@ -112,7 +112,7 @@ def accuracy_reward_lv35(completions, solution, **kwargs):
         else:
             # If the gold solution is not parseable, we reward 1 to skip this example
             reward = 1.0
-            print("Failed to parse gold solution: ", box_sol)
+            print("accuracy_reward_lv35: Failed to parse gold solution: ", box_sol)
         rewards.append(reward)
 
     return rewards
@@ -147,6 +147,7 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
     Adapted from: https://gist.github.com/willccbb/4676755236bb08cab5f4e54a0475d6fb#file-grpo_demo-py-L90
     """
 
+
     def count_tags(text: str) -> float:
         count = 0.0
         if text.count("<think>\n") == 1:
@@ -159,7 +160,11 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
             count += 0.25
         return count
 
-    contents = [completion[0]["content"] for completion in completions]
+    if isinstance(completions[0],(dict)):
+        contents = [completion["content"] for completion in completions]
+    else:
+        contents = [completion for completion in completions]
+
     return [count_tags(c) for c in contents]
 
 
@@ -173,7 +178,14 @@ def reasoning_steps_reward(completions, **kwargs):
         First,|Second,|Next,|Finally, - matches transition words
     """
     pattern = r"(Step \d+:|^\d+\.|\n-|\n\*|First,|Second,|Next,|Finally,)"
-    completion_contents = [completion[0]["content"] for completion in completions]
+
+    # completion_contents = [completion[0]["content"] for completion in completions]
+    if isinstance(completions[0], (dict)):
+        completion_contents = [completion["content"] for completion in completions]
+    else:
+        completion_contents = [completion for completion in completions]
+
+
     matches = [len(re.findall(pattern, content)) for content in completion_contents]
 
     # Magic number 3 to encourage 3 steps and more, otherwise partial reward
@@ -194,20 +206,33 @@ def len_reward(completions: list[Dict[str, str]], solution: list[str], **kwargs)
         - For correct answers: reward = 0.5 - (len - min_len)/(max_len - min_len)
         - For incorrect answers: reward = min(0, 0.5 - (len - min_len)/(max_len - min_len))
     """
-    contents = [completion[0]["content"] for completion in completions]
+    if isinstance(completions[0], (dict)):
+        contents = [completion["content"] for completion in completions]
+    else:
+        contents = [completion for completion in completions]
 
     # First check correctness of answers
     correctness = []
     for content, sol in zip(contents, solution):
+        #############################
+        # gold_parsed = parse(
+        #     sol,
+        #     extraction_mode="first_match",
+        #     extraction_config=[LatexExtractionConfig()],
+        # )
+        # if len(gold_parsed) == 0:
+        #############################
+        ####### d20250717修改 ########
+        box_sol = "$\\\\boxed{}$".format(sol)
         gold_parsed = parse(
-            sol,
+            box_sol,
             extraction_mode="first_match",
-            extraction_config=[LatexExtractionConfig()],
         )
         if len(gold_parsed) == 0:
+        ####### d20250717修改 ########
             # Skip unparseable examples
             correctness.append(True)  # Treat as correct to avoid penalizing
-            print("Failed to parse gold solution: ", sol)
+            print("len_reward: Failed to parse gold solution: ", sol)
             continue
 
         answer_parsed = parse(
@@ -284,7 +309,7 @@ def get_cosine_scaled_reward(
             gold_parsed = parse(sol, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
             if len(gold_parsed) == 0:
                 rewards.append(1.0)  # Skip unparseable examples
-                print("Failed to parse gold solution: ", sol)
+                print("cosine_scaled_reward: Failed to parse gold solution: ", sol)
                 continue
 
             answer_parsed = parse(
@@ -354,7 +379,11 @@ def get_repetition_penalty_reward(ngram_size: int, max_penalty: float):
             completions: List of model completions
         """
 
-        contents = [completion[0]["content"] for completion in completions]
+        if isinstance(completions[0], (dict)):
+            contents = [completion["content"] for completion in completions]
+        else:
+            contents = [completion for completion in completions]
+
         rewards = []
         for completion in contents:
             if completion == "":

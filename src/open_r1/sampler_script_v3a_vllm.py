@@ -630,11 +630,12 @@ class SamplerGPGTrainer(GPGTrainer):
             current_mtime = self.sync_weights_path.stat().st_mtime
             if current_mtime > self.last_sync_time:
                 logger.info(f"[Sampler Rank-{self.rank}] Detected new weights from {self.sync_weights_path}. Loading...")
-                state_dict = torch.load(self.sync_weights_path, map_location="cpu")
+
+                global_step, state_dict = torch.load(self.sync_weights_path, map_location="cpu") # d20250717修改
                 self.model.load_state_dict(state_dict)
                 self._move_model_to_vllm()
                 self.last_sync_time = current_mtime
-                self.model_ids += 1
+                self.model_ids = global_step # d20250717修改
                 logger.info(f"[Sampler Rank-{self.rank}] New weights loaded successfully. model_ids:{self.model_ids-1}->{self.model_ids}")
 
         except FileNotFoundError:

@@ -130,56 +130,8 @@ class SamplerSyncCallback(TrainerCallback):
             self.last_synced_step = state.global_step
             if state.is_world_process_zero:
                 unwrapped_model = self.trainer.accelerator.unwrap_model(model)
-
                 temp_path = self.sync_weights_path.with_suffix(".tmp")
-
-                # 【关键修改】在保存之前，确保临时文件的父目录存在
-                # temp_path.parent 获取父目录的 Path 对象
-                # .mkdir(parents=True, exist_ok=True) 会：
-                #   - parents=True: 如果需要，会一并创建所有上层父目录
-                #   - exist_ok=True: 如果目录已经存在，不会报错
                 temp_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # # 检查最后层前 5 个 key
-                # state_dict = unwrapped_model.state_dict()
-                # if unwrapped_model.state_dict():
-                #     validation_keys = list(state_dict.keys())[-5:]
-                #     for key in validation_keys:
-                #         print(f"\n>>>>>>>>>> 检查层：{key}")
-                #         weight_tensor = state_dict[key]
-                #         weight_cpu = weight_tensor.cpu().detach().flatten()
-                        
-                #         # 取前5个值（对大的权重矩阵只显示开头）
-                #         sample_size = min(5, weight_cpu.numel())
-                #         print(f"采样值: {weight_cpu[:sample_size].tolist()}")
-                # # 现在可以安全地保存了
-                # torch.save(state_dict, temp_path)
-                # 现在可以安全地保存了
-                torch.save(unwrapped_model.state_dict(), temp_path)
-
+                torch.save((state.global_step, unwrapped_model.state_dict()), temp_path) # d20250717修改
                 os.rename(temp_path, self.sync_weights_path)
-
                 print(f"[Learner] Step {state.global_step}: Synced weights for sampler at {self.sync_weights_path}")
-
-        # if state.global_step > self.last_synced_step and state.global_step % self.sync_steps == 0:
-        #     self.last_synced_step = state.global_step
-        #
-        #     # Accelerator 会处理好进程同步，但我们通常还是在主进程执行IO操作
-        #     if state.is_world_process_zero:
-        #         print(f"[Learner] Step {state.global_step}: Gathering and syncing weights for sampler...")
-        #
-        #     # 【关键修改】使用 accelerator 来获取完整的 state_dict
-        #     # 这个函数是阻塞的，它会等待所有进程的参数都聚合过来
-        #     # 默认情况下，它会将权重聚合到 CPU 以避免 OOM
-        #     full_state_dict = self.trainer.accelerator.get_state_dict(model)
-        #
-        #     # 只有主进程负责写入文件
-        #     if state.is_world_process_zero:
-        #         temp_path = self.sync_weights_path.with_suffix(".tmp")
-        #         temp_path.parent.mkdir(parents=True, exist_ok=True)
-        #
-        #         # 保存的是聚合后的完整 state_dict
-        #         torch.save(full_state_dict, temp_path)
-        #
-        #         os.rename(temp_path, self.sync_weights_path)
-        #         print(f"[Learner] Step {state.global_step}: Synced weights for sampler at {self.sync_weights_path}")

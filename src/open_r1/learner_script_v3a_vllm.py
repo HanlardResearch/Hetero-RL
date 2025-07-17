@@ -72,47 +72,14 @@ import time
 from transformers.training_args import OptimizerNames, ParallelMode, TrainingArguments
 
 from transformers.utils import (
-    ADAPTER_CONFIG_NAME,
-    ADAPTER_SAFE_WEIGHTS_NAME,
-    ADAPTER_WEIGHTS_NAME,
-    CONFIG_NAME,
-    SAFE_WEIGHTS_INDEX_NAME,
-    SAFE_WEIGHTS_NAME,
-    WEIGHTS_INDEX_NAME,
-    WEIGHTS_NAME,
-    XLA_FSDPV2_MIN_VERSION,
-    PushInProgress,
-    PushToHubMixin,
-    can_return_loss,
-    check_torch_load_is_safe,
-    find_labels,
     is_accelerate_available,
-    is_apex_available,
-    is_apollo_torch_available,
-    is_bitsandbytes_available,
-    is_datasets_available,
-    is_galore_torch_available,
-    is_grokadamw_available,
-    is_in_notebook,
-    is_ipex_available,
-    is_liger_kernel_available,
-    is_lomo_available,
-    is_peft_available,
-    is_safetensors_available,
-    is_sagemaker_dp_enabled,
     is_sagemaker_mp_enabled,
-    is_schedulefree_available,
     is_torch_hpu_available,
     is_torch_mlu_available,
     is_torch_mps_available,
     is_torch_musa_available,
-    is_torch_neuroncore_available,
     is_torch_npu_available,
-    is_torch_xla_available,
     is_torch_xpu_available,
-    is_torchao_available,
-    logging,
-    strtobool,
 )
 from packaging import version
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
@@ -230,47 +197,6 @@ class LearnerGPGTrainer(GPGTrainer):
         )
 
 
-
-
-    # def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-    #     mode = "train" if self.model.training else "eval"
-    #     metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
-    #
-    #     # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-    #     # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-    #     if mode == "eval":
-    #         metrics = {f"eval_{key}": val for key, val in metrics.items()}
-    #
-    #     logs = {**logs, **metrics}
-    #     super().log(logs, start_time)
-    #     self._metrics[mode].clear()
-    #
-    #     if self.accelerator.is_main_process and self.log_completions:
-    #         if is_rich_available():
-    #             print_prompt_completions_sample(
-    #                 self._textual_logs["prompt"],
-    #                 self._textual_logs["completion"],
-    #                 self._textual_logs["rewards"],
-    #                 self._textual_logs["advantages"],
-    #                 self.state.global_step,
-    #                 self.num_completions_to_print,
-    #             )
-    #
-    #         if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-    #             import pandas as pd
-    #
-    #             table = {
-    #                 "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
-    #                 "prompt": self._textual_logs["prompt"],
-    #                 "completion": self._textual_logs["completion"],
-    #                 **self._textual_logs["rewards"],
-    #                 "advantage": self._textual_logs["advantages"],
-    #             }
-    #             torch.save(table, f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table_line173.pt")
-    #             df = pd.DataFrame(table)
-    #             if self.wandb_log_unique_prompts:
-    #                 df = df.drop_duplicates(subset=["prompt"])
-    #             wandb.log({"completions": wandb.Table(dataframe=df)})
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -611,8 +537,9 @@ class LearnerGPGTrainer(GPGTrainer):
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
-                print(f'>>>>>>>>>>>>generation_kwargs:{generation_kwargs}')
-                print(f'>>>>>>>>>>>>self.args.generation_kwargs:{self.args.generation_kwargs}')
+                if self.rank ==0 and n_gen==1:
+                    logger.info(f'generation_kwargs:{generation_kwargs}\n')
+                # print(f'>>>>>>>>>>>>self.args.generation_kwargs:{self.args.generation_kwargs}')
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.

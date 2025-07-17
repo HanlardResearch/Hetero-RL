@@ -48,8 +48,14 @@ report_to:
 - tensorboard
 reward_funcs:
 - accuracy_lv35
+- tag_count
+- length
+- repetition_penalty
 reward_weights:
-- 1.0
+- 0.25
+- 0.25
+- 0.25
+- 0.25
 save_strategy: "steps"
 save_steps: 33
 seed: 42
