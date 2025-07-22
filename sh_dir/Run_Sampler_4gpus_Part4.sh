@@ -1,7 +1,7 @@
 formatted_time=$(date "+%Y%m%d-%H-%M-%S")
 scriptname=$1
 xth=$2
-log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/sampler/$1_part4_$2thExp_${formatted_time}.log
+log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/sampler/$1_part4_$2_${formatted_time}.log
 echo $log_path
 export WANDB_MODE=offline
 export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/sampler
@@ -12,9 +12,10 @@ export GPUS=4
 export MASTER_ADDR="localhost"
 export MASTER_PORT=29524
 
-export SAVEPATH=/extrahome0/save_dir/GPG/4gpus/SamplerV3a_vllm_part4_${xth}th/Qwen3-1.7B
-export FS_QUEUE_PATH=/extrahome0/save_dir/GPG/4gpus/AsyncV3a_vllm_${xth}th/Rollout/Qwen3-1.7B
-export SYNC_WEIGHTS_PATH=/extrahome0/save_dir/GPG/4gpus/AsyncV3a_vllm/tmp_${xth}th/Qwen3-1.7B/gpg_async_weights.pt
+export SAVEPATH=/userhome/save_dir/GPG/4gpus/Sampler_${xth}/part4/Qwen3-1.7B
+export FS_QUEUE_PATH=/userhome/save_dir/GPG/4gpus/Async_${xth}/Rollout/Qwen3-1.7B
+export SYNC_WEIGHTS_PATH=/userhome/save_dir/GPG/4gpus/Async_${xth}/tmp/Qwen3-1.7B/gpg_async_weights.pt
+
 export SYNC_SAMPLER_STEPS=1
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 #rm $SYNC_WEIGHTS_PATH
@@ -28,5 +29,5 @@ accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --model_name_or_path "/extrahome0/HF_models/Qwen/Qwen3-1.7B" --dataset_name "/extrahome0/HF_datasets/open-r1/simplelr_qwen_level3to5" \
   --per_device_train_batch_size 8 --log_completions True \
   --wandb_entity "pcl-zh" --wandb_project "GPG"  --report_to "wandb" \
-  --config recipes/AsyncGPG/config_simple_rl_math_l35_nRMs_v1.yaml \
+  --config recipes/AsyncGPG/config_simple_rl_math_l35_nRMs_$3.yaml \
   --vllm_gpu_memory_utilization 0.90 > $log_path 2>&1

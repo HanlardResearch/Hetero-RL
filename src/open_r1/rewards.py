@@ -117,6 +117,115 @@ def accuracy_reward_lv35(completions, solution, **kwargs):
 
     return rewards
 
+
+def extra_box_len_reward_v1(completions, threhold=50.0, **kwargs):
+    """Reward function that checks if the completion is the same as the ground truth."""
+
+    def after_substring(x, y):
+        if x not in y:  # 这里加一些特殊处理
+            return ("", 1)
+        index = y.find(x)
+        if index == -1:
+            return None  # 或者可以返回 "" 表示未找到
+        return (y[index + len(x):], 0)
+
+    if isinstance(completions[0], (dict)):
+        contents = [completion["content"] for completion in completions]
+    else:
+        contents = [completion for completion in completions]
+
+    penaltys = []
+    n_notfind = 0
+    for content in contents:
+        # We require the answer to be provided in correct latex (no malformed operators)
+        answer_parsed = parse(
+            content,
+            extraction_config=[
+                LatexExtractionConfig(
+                    normalization_config=NormalizationConfig(
+                        nits=False,
+                        malformed_operators=False,
+                        basic_latex=True,
+                        equations=True,
+                        boxed="all",
+                        units=True,
+                    ),
+                    # Ensures that boxed is tried first
+                    boxed_match_priority=0,
+                    try_extract_without_anchor=False,
+                )
+            ],
+            extraction_mode="first_match",
+        )
+
+        if len(answer_parsed) == 0:
+            penaltys.append(0.0)
+        else:
+            extra_box_part, notfind = after_substring(answer_parsed[-1], content)
+            n_notfind += notfind
+            #             print("extra_box_part",extra_box_part)
+            extra_len = len(extra_box_part)
+            if extra_len < threhold:
+                penaltys.append(0.0)
+            else:
+                penalty = max(-(extra_len / threhold - 1.0), -1.0)
+                #                 penalty = extra_len
+                penaltys.append(penalty)
+    return penaltys
+
+def get_language_penalty_reward(completions, **kwargs):
+    """
+    语言惩罚奖励函数：检查completion中是否包含非英文/数学公式的禁用字符(英文字母、数学符号、LaTeX命令和空格除外)
+    """
+
+    # def get_length(text):
+    #     """
+    #     获取文本对应的token长度
+    #     """
+    #     if not text:
+    #         return 0
+    #     inputs = tokenizer(text, return_tensors="pt", padding=False, truncation=False)
+    #     return inputs["input_ids"].shape[1]
+
+    if isinstance(completions[0], dict):
+        contents = [comp["content"] for comp in completions]
+    else:
+        contents = completions
+
+    # 安全字符集
+    allowed_symbols = " +-*/=()[]{}<>^_.,:;!?|&%~#@\"'"  # 常见数学符号
+    safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" + allowed_symbols)
+
+    rewards = []
+
+    # 正则表达式：同时匹配LaTeX命令 (如 \frac{}{}, \alpha, \sqrt 等)和公式
+    latex_pattern = r'\$.*?\$|\\[a-zA-Z]+|\\[^\w\s]'
+
+    for content in contents:
+        if not content.strip():
+            rewards.append(0.0)
+            continue
+
+        # 步骤1: 移除所有LaTeX命令及公式
+        cleaned = re.sub(latex_pattern, '', content)
+
+        # 步骤2: 统计禁用字符
+        non_allowed_count = 0
+        non_allowed_char_str = ""
+        for char in cleaned:
+            if char not in safe_chars and not char.isspace():
+                non_allowed_count += 1
+                non_allowed_char_str += char
+
+        # 步骤3: 计算禁用token频率
+        token_ratio = len(non_allowed_char_str) / len(content)
+
+        # 步骤4: 按禁用token频率惩罚
+        reward = -1.0 * token_ratio if non_allowed_count > 0 else 0.0
+        rewards.append(reward)
+
+    return rewards
+
 def format_reward(completions, **kwargs):
     """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""
     pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
@@ -623,6 +732,9 @@ def get_reward_funcs(script_args) -> list[Callable]:
         ),
         "code_format": get_code_format_reward(language=script_args.code_language),
         "tag_count": tag_count_reward,
+        ##############################
+        "extra_box_v1": extra_box_len_reward_v1,
+        "language_penalty":get_language_penalty_reward,
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 

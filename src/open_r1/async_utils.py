@@ -22,7 +22,7 @@ def setup_fs_queue(base_path: str):
     return queue_dir, processing_dir
 
 
-def push_to_fs_queue(queue_dir: Path, data: Dict[str, Any]):
+def push_to_fs_queue(queue_dir: Path, data: Dict[str, Any], time_save, rank):
     """
     将包含 PyTorch 张量的数据字典原子地写入文件队列。
     使用 torch.save 进行序列化。
@@ -45,7 +45,7 @@ def push_to_fs_queue(queue_dir: Path, data: Dict[str, Any]):
 
     # 2. 原子地重命名为正式文件，表示数据已准备好被消费。
     # 这种方式可以防止消费者读到不完整的文件。
-    final_filename = f"data_{int(time.time_ns())}_{uuid.uuid4().hex[:6]}.pt"
+    final_filename = f"data_{int(time_save*1000)}_SamplerRank_{rank}_{uuid.uuid4().hex[:6]}.pt"
     final_path = queue_dir / final_filename
     os.rename(tmp_path, final_path)
     print(f"文件保存在: {final_path}")
@@ -58,6 +58,7 @@ def pop_from_fs_queue(queue_dir: Path, processing_dir: Path, rank: int, timeout:
     """
     start_time = time.time()
     while time.time() - start_time < timeout:
+        delta_time = time.time() - start_time
         # 1. 查找队列中的所有数据文件
         # 使用 glob 匹配正式文件名模式
         files = sorted(list(queue_dir.glob("data_*.pt")))
@@ -72,7 +73,7 @@ def pop_from_fs_queue(queue_dir: Path, processing_dir: Path, rank: int, timeout:
         # 3. 【核心】通过原子重命名操作来“锁定”文件
         # 将文件从 'queue' 目录移动到 'processing' 目录，并加上 rank 标记。
         # 只有一个进程能成功，其他进程会因为 FileNotFoundError 而进入下一轮循环。
-        processing_filename = f"proc_{rank}_{source_path.name}"
+        processing_filename = f"LearnerRank_{rank}_{source_path.name}"
         processing_path = processing_dir / processing_filename
 
         try:
@@ -104,7 +105,7 @@ def pop_from_fs_queue(queue_dir: Path, processing_dir: Path, rank: int, timeout:
                 print(f"文件迁移至：{processing_path}")
 
     # 如果在指定时间内没有等到任何文件，则超时
-    print(f"WARNING [Rank {rank}]: Timed out after {timeout}s waiting for data from the file queue at '{queue_dir}'.")
+    print(f"WARNING [Rank {rank}]: Timed out after {delta_time} (Max-{timeout})s waiting for data from the file queue at '{queue_dir}'.")
     return None
 
 # =================================================================================

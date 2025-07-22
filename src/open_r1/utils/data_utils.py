@@ -118,7 +118,7 @@ def custom_loading_dataset(dataset_name, train_name='train.parquet', test_name='
         # 'ability': 'skill',
         # 'reward_model': 'reward',
         # 'extra_info': 'metadata',
-        # 'question': 'problem'
+        'question': 'problem'
     }
 
     # 重命名列
