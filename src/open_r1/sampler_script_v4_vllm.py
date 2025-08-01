@@ -55,7 +55,7 @@ from trl.models import  unwrap_model_for_generation
 from trl.trainer.utils import (
     pad,
 )
-from accelerate.utils import reduce
+from accelerate.utils import reduce, broadcast
 from open_r1.Time_Delay import get_delay_sampler
 
 if is_vllm_available():
@@ -122,7 +122,7 @@ class SamplerGPGTrainer(GPGTrainer):
     它封装了模型同步、数据生成和与 Redis 通信的所有逻辑。
     """
 
-    def __init__(self,  delay_sampler, *args, **kwargs):
+    def __init__(self,  delay_list, *args, **kwargs):
         # 移除 kwargs 中的 optimizers，以防与我们的虚拟优化器冲突
         self.fs_queue_path = kwargs.pop("fs_queue_path")
 
@@ -142,8 +142,8 @@ class SamplerGPGTrainer(GPGTrainer):
         self._epoch_iterator = iter(self._dataloader)
         self.batch_ids = 0
         self.model_ids = 0
-        self.delay_sampler = delay_sampler
-
+        self.delay_list = delay_list.__iter__()
+        logger.info(f"delay_list[:20]: {delay_list[:20]}")
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -686,24 +686,22 @@ class SamplerGPGTrainer(GPGTrainer):
         logger.info(f"*** Starting Sampler Loop (PID: {os.getpid()}) on device: {self.accelerator.device} ***")
         batch_counter = 0
 
-        delay_time = reduce(torch.tensor([self.delay_sampler.get_delay()], device=self.accelerator.device, dtype=torch.float64))
+        delay_time = broadcast(torch.tensor([next(self.delay_list)], device=self.accelerator.device, dtype=torch.float64),from_process=0)
+
         logger.info(f"first_delay_time:{delay_time}")
-        last_time = reduce(torch.tensor([ time.time()], device=self.accelerator.device, dtype=torch.float64)) # 记录上一次同步时间
+        last_time = broadcast(torch.tensor([time.time()], device=self.accelerator.device, dtype=torch.float64),from_process=0) # 记录上一次同步时间
         logger.info(f"first_last_time:{last_time}")
         while True:
             # 1. 同步模型
-            now_time = reduce(torch.tensor([time.time()], device=self.accelerator.device, dtype=torch.float64))
+            now_time =  broadcast(torch.tensor([time.time()], device=self.accelerator.device, dtype=torch.float64),from_process=0) # 记录上一次同步时间
             wait_time =now_time - last_time
-
             if wait_time > delay_time:
                 self._sync_model_weights()
-                logger.info(f"[RANK-{self.rank}] 同步模型完成,延迟 {wait_time.item():.1f}(>{delay_time.item():.1f}) 秒")
-                
-                last_time = reduce(torch.tensor([time.time()], device=self.accelerator.device, dtype=torch.float64)) # 更新上次同步时间
-                
-                delay_time = reduce(torch.tensor([self.delay_sampler.get_delay()], device=self.accelerator.device, dtype=torch.float64)) # 采样同步时间延迟
+                print(f"[RANK-{self.rank}] 同步模型完成,延迟 {wait_time.item():.1f}(>{delay_time.item():.1f}) 秒")
+                last_time =  broadcast(torch.tensor([time.time()], device=self.accelerator.device, dtype=torch.float64),from_process=0) # 更新上次同步时间
+                delay_time = broadcast(torch.tensor([next(self.delay_list)], device=self.accelerator.device, dtype=torch.float64),from_process=0) # 采样同步时间延迟
             else:
-                logger.info(f"[RANK-{self.rank}] 模型传输进度: {(wait_time/delay_time*100).item():.1f}%, 耗时: {wait_time.item():.1f}(<{delay_time.item():.1f})秒")
+                print(f"[RANK-{self.rank}] 模型传输进度: {(wait_time/delay_time*100).item():.1f}%, 耗时: {wait_time.item():.1f}(<{delay_time.item():.1f})秒")
 
             # 2. 获取下一批 prompt
             batch = self._get_next_batch()
@@ -740,7 +738,13 @@ class SamplerGPGTrainer(GPGTrainer):
 # =================================================================================
 
 def main(script_args, training_args, model_args):
-    # Set seed for reproducibility
+    # 设置固定的随机种子，用于延迟时间采样
+    rank = training_args.local_rank
+    delay_sampler=get_delay_sampler(script_args)
+    delay_list = delay_sampler.get_delay_list(n=500)
+    print(f"[RANK-{rank}] delay_list[:20]: {delay_list[:20]}")
+
+    # 设置随时间变化的随机种子，用于多脚本数据采样
     rank =training_args.local_rank
     seed= int((rank+1)*(int(time.time()*1000)%365))
     training_args.seed = seed
@@ -836,8 +840,10 @@ def main(script_args, training_args, model_args):
 
     fs_queue_path = os.getenv("FS_QUEUE_PATH", "/extrahome0/save_dir/GPG/4gpus/Async/Qwen3-0.6B")
 
+
+
     trainer = SamplerGPGTrainer(
-        delay_sampler=get_delay_sampler(script_args),
+        delay_list=delay_list,
         model=model_args.model_name_or_path,
         reward_funcs=reward_funcs,
         args=training_args,

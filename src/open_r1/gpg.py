@@ -30,6 +30,7 @@ from open_r1.utils.callbacks import get_callbacks
 from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 from open_r1.gpg_trainer import GPGTrainer
+# from open_r1.gpg_trainer_vllm import GPGTrainer
 from open_r1.utils.data_utils import custom_loading_dataset
 from transformers import TrainerCallback
 
@@ -103,7 +104,7 @@ def main(script_args, training_args, model_args):
 
         prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
-
+    
     def make_conversation_math35(example):
         prompt = []
         # prompt.append({"role": "user", "content": example["instruction"][0]['content']})
@@ -111,10 +112,12 @@ def main(script_args, training_args, model_args):
         # prompt.append({"role": "user", "content": example["problem"]})
         return {"prompt": prompt}
 
-    if 'simplelr_qwen_level3to5' in script_args.dataset_name:
-        dataset = dataset.map(make_conversation_math35)
-    else:
-        dataset = dataset.map(make_conversation)
+    # if 'simplelr_qwen_level3to5' in script_args.dataset_name:
+    #     dataset = dataset.map(make_conversation_math35)
+    # else:
+    #     dataset = dataset.map(make_conversation)
+
+    dataset = dataset.map(make_conversation)
 
     for split in dataset:
         if "messages" in dataset[split].column_names:

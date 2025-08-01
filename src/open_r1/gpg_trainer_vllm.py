@@ -193,6 +193,11 @@ class GPGTrainer(GRPOTrainer):
                          optimizers,peft_config)
         self.scale_batch = args.scale_batch
         self.data_weight = {'train': defaultdict(list), 'eval': defaultdict(list)}
+        self.rank = self.accelerator.process_index
+
+        logger.info(
+            f"[Rank {self.rank}] gpg_trainer_vllm initialized. "
+        )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # See _get_train_sampler for an explanation of the sampler.
@@ -274,15 +279,16 @@ class GPGTrainer(GRPOTrainer):
                 epoch_iterator = frame.f_locals.get('epoch_iterator')
                 assert epoch_iterator is not None
                 self._epoch_iterator = epoch_iterator
-            if self.state.global_step % self.num_iterations == 0:
-                inputs = self._generate_and_score_completions(inputs)
-                self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
-            else:
-                inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
-            self._step += 1
-        else:
-            # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
-            inputs = self._generate_and_score_completions(inputs)
+        #     if self.state.global_step % self.num_iterations == 0:
+        #         inputs = self._generate_and_score_completions(inputs)
+        #         self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
+        #     else:
+        #         inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+        #     self._step += 1
+        # else:
+        #     # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
+        #     inputs = self._generate_and_score_completions(inputs)
+        inputs = self._generate_and_score_completions(inputs)
         return inputs
 
     @profiling_decorator
@@ -400,41 +406,59 @@ class GPGTrainer(GRPOTrainer):
                     self._last_loaded_step = self.state.global_step
 
                 # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-                all_prompts_text = gather_object(prompts_text)
-                if self.accelerator.is_main_process:
-                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                    # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                    with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                        )
+                if self.guided_decoding_regex:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
-                completion_ids = broadcast_object_list(completion_ids, from_process=0)
-                process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + 1) * len(prompts),
-                )
-                completion_ids = completion_ids[process_slice]
+                    guided_decoding = None
 
+                generation_kwargs = {
+                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                    "repetition_penalty": self.repetition_penalty,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                    "max_tokens": self.max_completion_length,
+                    "guided_decoding": guided_decoding,
+                }
+                if self.args.generation_kwargs is not None:
+                    generation_kwargs.update(self.args.generation_kwargs)
+                sampling_params = SamplingParams(**generation_kwargs)
+                if self.rank ==0 and n_gen==1:
+                    logger.info(f'generation_kwargs:{generation_kwargs}\n')
+                # print(f'>>>>>>>>>>>>self.args.generation_kwargs:{self.args.generation_kwargs}')
+                if self.vllm_tensor_parallel_size > 1:
+                    # Gather prompts from all ranks in the TP group and flatten.
+                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
+
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+
+                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Slice completions for this rank within its TP group.
+                    # Each rank generates all outputs — we keep only our share.
+                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
                 # Pad the completions, and concatenate them with the prompts
                 completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
                 prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             else:
                 # Regular generation path
+                # print(f'>>>>>>>>>>>>prompt_ids:{prompt_ids}')
+                # print(f'>>>>>>>>>>>>attention_mask:{prompt_mask}')
+                # print(f'>>>>>>>>>>>>generation_config:{self.generation_config}')
+                # print(f'>>>>>>>>>>>>self.model_args:{self.model_args}')
+
                 with unwrap_model_for_generation(
                         self.model_wrapped, self.accelerator,
                         gather_deepspeed3_params=self.args.ds3_gather_for_generation
@@ -443,18 +467,27 @@ class GPGTrainer(GRPOTrainer):
                         prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                     )
 
+                # print(f'>>>>>>>>>>>>prompt_completion_ids:{prompt_completion_ids}')
+                # print(f'prompt_completion_ids.shape:{prompt_completion_ids.shape}')
                 # prompt_completion_ids = pad_sequence_to_length(prompt_completion_ids,
                 #                                                self.max_prompt_length+self.max_completion_length,
                 #                                                self.processing_class.pad_token_id, left_pad=False)
 
                 # Compute prompt length and extract completion ids
-                prompt_length = prompt_ids.size(1)
-                prompt_ids = prompt_completion_ids[:, :prompt_length]
-                completion_ids = prompt_completion_ids[:, prompt_length:]
-                # all_prompts_text = gather_object(prompts_text)
-                all_problems = gather_object(problems)
-                ordered_set_of_problems = all_problems[:: self.num_generations]
-                # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+            # logger.info(f"prompt_completion_ids生成时长： {(time_end - time_start):.2f}s")
+            prompt_length = prompt_ids.size(1)
+            # logger.info(f"current rank:{self.rank}")
+            # logger.info(f"prompt_ids.shape:{prompt_ids.shape}")
+            # logger.info(f"prompt_ids:{prompt_ids}")
+            # logger.info(f"prompt_completion_ids.shape:{prompt_completion_ids.shape}")
+            # logger.info(f"prompt_completion_ids:{prompt_completion_ids}")
+            prompt_ids = prompt_completion_ids[:, :prompt_length]
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+            # all_prompts_text = gather_object(prompts_text)
+            all_problems = gather_object(problems)
+            ordered_set_of_problems = all_problems[:: self.num_generations]
+            # ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+
 
             # Mask everything after the first EOS token
             is_eos = completion_ids == self.processing_class.eos_token_id

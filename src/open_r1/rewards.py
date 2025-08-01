@@ -6,10 +6,10 @@ import math
 import re
 from functools import partial, update_wrapper
 from typing import Callable, Dict
+import torch.distributed as dist
 
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
-
 from .utils import is_e2b_available
 from .utils.ioi import SubtaskResult, add_includes, get_piston_client_from_env, score_subtask
 
@@ -22,10 +22,20 @@ if is_e2b_available():
 else:
     AsyncSandbox = None
 
+def pre_process(completions):
+    """retrieve the completion content from input"""
+    if  isinstance(completions[0],(list,)):
+        completion_contents = [completion[0]["content"] for completion in completions]
+    elif isinstance(completions[0],(dict)):
+        completion_contents = [completion["content"] for completion in completions]
+    else:
+        completion_contents = [completion for completion in completions]
+    return completion_contents
 
 def accuracy_reward(completions, solution, **kwargs):
     """Reward function that checks if the completion is the same as the ground truth."""
-    contents = [completion[0]["content"] for completion in completions]
+    # contents = [completion[0]["content"] for completion in completions]
+    contents = pre_process(completions)
     rewards = []
     for content, sol in zip(contents, solution):
         gold_parsed = parse(
@@ -70,39 +80,51 @@ def accuracy_reward(completions, solution, **kwargs):
 
 def accuracy_reward_lv35(completions, solution, **kwargs):
     """Reward function that checks if the completion is the same as the ground truth."""
-    if isinstance(completions[0],(dict)):
-        contents = [completion["content"] for completion in completions]
-    else:
-        contents = [completion for completion in completions]
-
+    # if isinstance(completions[0],(dict)):
+    #     contents = [completion["content"] for completion in completions]
+    # else:
+    #     contents = [completion for completion in completions]
+    contents = pre_process(completions)
     rewards = []
     for content, sol in zip(contents, solution):
         box_sol = "$\\\\boxed{}$".format(sol)
-        gold_parsed = parse(
-            box_sol,
-            extraction_mode="first_match",
-        )
-        if len(gold_parsed) != 0:
-            # We require the answer to be provided in correct latex (no malformed operators)
-            answer_parsed = parse(
-                content,
-                extraction_config=[
-                    LatexExtractionConfig(
-                        normalization_config=NormalizationConfig(
-                            nits=False,
-                            malformed_operators=False,
-                            basic_latex=True,
-                            equations=True,
-                            boxed="all",
-                            units=True,
-                        ),
-                        # Ensures that boxed is tried first
-                        boxed_match_priority=0,
-                        try_extract_without_anchor=False,
-                    )
-                ],
+        try:
+            gold_parsed = parse(
+                box_sol,
                 extraction_mode="first_match",
             )
+        except TimeoutError:
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            print(f"[Rank  {rank}] gold parse timeout | content='{content}' | sol='{sol}' | box_sol='{box_sol}'")
+            rewards.append(1.0)
+            continue
+        if len(gold_parsed) != 0:
+            # We require the answer to be provided in correct latex (no malformed operators)
+            try:
+                answer_parsed = parse(
+                    content,
+                    extraction_config=[
+                        LatexExtractionConfig(
+                            normalization_config=NormalizationConfig(
+                                nits=False,
+                                malformed_operators=False,
+                                basic_latex=True,
+                                equations=True,
+                                boxed="all",
+                                units=True,
+                            ),
+                            # Ensures that boxed is tried first
+                            boxed_match_priority=0,
+                            try_extract_without_anchor=False,
+                        )
+                    ],
+                    extraction_mode="first_match",
+                )
+            except TimeoutError:
+                rank = dist.get_rank() if dist.is_initialized() else 0
+                print(f"[Rank {rank}] answer parse timeout | content='{content}' | sol='{sol}'")
+                rewards.append(0.0)
+                continue
             # Reward 1 if the content is the same as the ground truth, 0 otherwise
             try:
                 reward = float(verify(answer_parsed, gold_parsed))
@@ -118,7 +140,7 @@ def accuracy_reward_lv35(completions, solution, **kwargs):
     return rewards
 
 
-def extra_box_len_reward_v1(completions, threhold=50.0, **kwargs):
+def extra_box_len_reward_v1(completions, threhold=100.0, **kwargs):
     """Reward function that checks if the completion is the same as the ground truth."""
 
     def after_substring(x, y):
@@ -129,11 +151,11 @@ def extra_box_len_reward_v1(completions, threhold=50.0, **kwargs):
             return None  # 或者可以返回 "" 表示未找到
         return (y[index + len(x):], 0)
 
-    if isinstance(completions[0], (dict)):
-        contents = [completion["content"] for completion in completions]
-    else:
-        contents = [completion for completion in completions]
-
+    # if isinstance(completions[0], (dict)):
+    #     contents = [completion["content"] for completion in completions]
+    # else:
+    #     contents = [completion for completion in completions]
+    contents = pre_process(completions)
     penaltys = []
     n_notfind = 0
     for content in contents:
@@ -173,6 +195,60 @@ def extra_box_len_reward_v1(completions, threhold=50.0, **kwargs):
                 penaltys.append(penalty)
     return penaltys
 
+def extra_box_len_reward_v2(completions, threhold=100.0, **kwargs):
+    """Reward function that checks if the completion is the same as the ground truth."""
+
+    def after_substring(x, y):
+        if x not in y:  # 这里加一些特殊处理
+            return ("", 1)
+        index = y.rfind(x)
+        if index == -1:
+            return None  # 或者可以返回 "" 表示未找到
+        return (y[index + len(x):], 0)
+
+    # if isinstance(completions[0], (dict)):
+    #     contents = [completion["content"] for completion in completions]
+    # else:
+    #     contents = [completion for completion in completions]
+    contents = pre_process(completions)
+    penaltys = []
+    n_notfind = 0
+    for content in contents:
+        # We require the answer to be provided in correct latex (no malformed operators)
+        answer_parsed = parse(
+            content,
+            extraction_config=[
+                LatexExtractionConfig(
+                    normalization_config=NormalizationConfig(
+                        nits=False,
+                        malformed_operators=False,
+                        basic_latex=True,
+                        equations=True,
+                        boxed="all",
+                        units=True,
+                    ),
+                    # Ensures that boxed is tried first
+                    boxed_match_priority=0,
+                    try_extract_without_anchor=False,
+                )
+            ],
+            extraction_mode="first_match",
+        )
+
+        if len(answer_parsed) == 0:
+            penaltys.append(0.0)
+        else:
+            extra_box_part, notfind = after_substring(answer_parsed[-1], content)
+            n_notfind += notfind
+            #             print("extra_box_part",extra_box_part)
+            extra_len = len(extra_box_part)
+            if extra_len < threhold:
+                penaltys.append(0.0)
+            else:
+                penalty = max(-(extra_len / threhold - 1.0), -1.0)
+                #                 penalty = extra_len
+                penaltys.append(penalty)
+    return penaltys
 def get_language_penalty_reward(completions, **kwargs):
     """
     语言惩罚奖励函数：检查completion中是否包含非英文/数学公式的禁用字符(英文字母、数学符号、LaTeX命令和空格除外)
@@ -187,11 +263,11 @@ def get_language_penalty_reward(completions, **kwargs):
     #     inputs = tokenizer(text, return_tensors="pt", padding=False, truncation=False)
     #     return inputs["input_ids"].shape[1]
 
-    if isinstance(completions[0], dict):
-        contents = [comp["content"] for comp in completions]
-    else:
-        contents = completions
-
+    # if isinstance(completions[0], dict):
+    #     contents = [comp["content"] for comp in completions]
+    # else:
+    #     contents = completions
+    contents = pre_process(completions)
     # 安全字符集
     allowed_symbols = " +-*/=()[]{}<>^_.,:;!?|&%~#@\"'"  # 常见数学符号
     safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" + allowed_symbols)
@@ -229,10 +305,11 @@ def get_language_penalty_reward(completions, **kwargs):
 def format_reward(completions, **kwargs):
     """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags, while the final answer is enclosed within <answer> and </answer> tags."""
     pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
-    if  isinstance(completions[0],(list,)):
-        completion_contents = [completion[0][0]["content"] for completion in completions]
-    else:
-        completion_contents = [completion for completion in completions]
+    # if  isinstance(completions[0],(list,)):
+    #     completion_contents = [completion[0][0]["content"] for completion in completions]
+    # else:
+    #     completion_contents = [completion for completion in completions]
+    completion_contents = pre_process(completions)
     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]
 
@@ -247,8 +324,20 @@ def format_reward_v2(completions, **kwargs):
             count += 1.0
         return count
 
-    contents = [completion[0]["content"] for completion in completions]
+    # contents = [completion[0]["content"] for completion in completions]
+    contents = pre_process(completions)
     return [count_tags(c) for c in contents]
+
+def format_reward_v3(completions, **kwargs):
+    """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags."""
+    pattern = r"^<think>\n.*?\n</think>\n.*?$"
+    # if  isinstance(completions[0],(list,)):
+    #     completion_contents = [completion[0][0]["content"] for completion in completions]
+    # else:
+    #     completion_contents = [completion for completion in completions]
+    completion_contents = pre_process(completions)
+    matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
 
 def tag_count_reward(completions, **kwargs) -> list[float]:
     """Reward function that checks if we produce the desired number of think and answer tags associated with `format_reward()`.
@@ -269,13 +358,55 @@ def tag_count_reward(completions, **kwargs) -> list[float]:
             count += 0.25
         return count
 
-    if isinstance(completions[0],(dict)):
-        contents = [completion["content"] for completion in completions]
-    else:
-        contents = [completion for completion in completions]
+    # if isinstance(completions[0],(dict)):
+    #     contents = [completion["content"] for completion in completions]
+    # else:
+    #     contents = [completion for completion in completions]
+    contents = pre_process(completions)
 
     return [count_tags(c) for c in contents]
 
+
+def tag_count_reward_v2(completions, **kwargs) -> list[float]:
+    """Reward function that checks if we produce the desired number of think and answer tags associated with `format_reward()`.
+
+    remove <answer>, </answer> from tag_count_reward
+    """
+
+    def count_tags(text: str) -> float:
+        count = 0.0
+        if text.count("<think>\n") == 1:
+            count += 0.5
+        else:
+            count -= 0.5
+        if text.count("\n</think>\n") == 1:
+            count += 0.5
+        else:
+            count -= 0.5
+        return count
+
+    # contents = [completion[0]["content"] for completion in completions]
+    contents = pre_process(completions)
+    return [count_tags(c) for c in contents]
+
+def fused_format_reward(completions, **kwargs):
+    """Reward function that checks if the reasoning process is enclosed within <think> and </think> tags. Also cater the number of <think> and </think> tags"""
+    pattern = r"^<think>\n\s*\S.*?\n</think>\n.*?$"
+    rewards = []
+    # print(f'completions[0]:{completions[0]}')
+    # if  isinstance(completions[0],(list,)):
+    #     completion_contents = [completion[0]["content"] for completion in completions]
+    # else:
+    #     completion_contents = [completion for completion in completions]
+    completion_contents = pre_process(completions)
+    for content in completion_contents:
+        reward = 1.0 if re.match(pattern, content, re.DOTALL | re.MULTILINE) else -1.0
+        if reward == 1.0:
+            reward = reward if content.count("<think>\n") == 1 and content.count("\n</think>\n") == 1 else reward - 2.0
+            # reward = reward if content.count("<think>") == 1 else reward - 1.0
+            # reward = reward if content.count("</think>") == 1 else reward - 1.0
+        rewards.append(reward)
+    return rewards
 
 def reasoning_steps_reward(completions, **kwargs):
     r"""Reward function that checks for clear step-by-step reasoning.
@@ -288,12 +419,12 @@ def reasoning_steps_reward(completions, **kwargs):
     """
     pattern = r"(Step \d+:|^\d+\.|\n-|\n\*|First,|Second,|Next,|Finally,)"
 
-    # completion_contents = [completion[0]["content"] for completion in completions]
-    if isinstance(completions[0], (dict)):
-        completion_contents = [completion["content"] for completion in completions]
-    else:
-        completion_contents = [completion for completion in completions]
-
+    # # completion_contents = [completion[0]["content"] for completion in completions]
+    # if isinstance(completions[0], (dict)):
+    #     completion_contents = [completion["content"] for completion in completions]
+    # else:
+    #     completion_contents = [completion for completion in completions]
+    completion_contents = pre_process(completions)
 
     matches = [len(re.findall(pattern, content)) for content in completion_contents]
 
@@ -315,11 +446,11 @@ def len_reward(completions: list[Dict[str, str]], solution: list[str], **kwargs)
         - For correct answers: reward = 0.5 - (len - min_len)/(max_len - min_len)
         - For incorrect answers: reward = min(0, 0.5 - (len - min_len)/(max_len - min_len))
     """
-    if isinstance(completions[0], (dict)):
-        contents = [completion["content"] for completion in completions]
-    else:
-        contents = [completion for completion in completions]
-
+    # if isinstance(completions[0], (dict)):
+    #     contents = [completion["content"] for completion in completions]
+    # else:
+    #     contents = [completion for completion in completions]
+    contents = pre_process(completions)
     # First check correctness of answers
     correctness = []
     for content, sol in zip(contents, solution):
@@ -411,7 +542,8 @@ def get_cosine_scaled_reward(
             max_value_correct: Maximum reward for correct answers
             max_len: Maximum length for scaling
         """
-        contents = [completion[0]["content"] for completion in completions]
+        # contents = [completion[0]["content"] for completion in completions]
+        contents = pre_process(completions)
         rewards = []
 
         for content, sol in zip(contents, solution):
@@ -488,11 +620,11 @@ def get_repetition_penalty_reward(ngram_size: int, max_penalty: float):
             completions: List of model completions
         """
 
-        if isinstance(completions[0], (dict)):
-            contents = [completion["content"] for completion in completions]
-        else:
-            contents = [completion for completion in completions]
-
+        # if isinstance(completions[0], (dict)):
+        #     contents = [completion["content"] for completion in completions]
+        # else:
+        #     contents = [completion for completion in completions]
+        contents = pre_process(completions)
         rewards = []
         for completion in contents:
             if completion == "":
@@ -734,6 +866,8 @@ def get_reward_funcs(script_args) -> list[Callable]:
         "tag_count": tag_count_reward,
         ##############################
         "extra_box_v1": extra_box_len_reward_v1,
+        "extra_box_v2": extra_box_len_reward_v2,
+        "fused_format": fused_format_reward,
         "language_penalty":get_language_penalty_reward,
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]

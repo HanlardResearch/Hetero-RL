@@ -1,13 +1,13 @@
 import numpy as np
 from scipy import stats
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
 import warnings
 
 
 class WeibullSampler:
-    def __init__(self, lower_bound=60, upper_bound=1920, confidence=0.995, default=60):
+    def __init__(self, lower_bound=60, upper_bound=1920, confidence=0.995, default=60,seed=42):
         """
         初始化威布尔分布采样器
         :param lower_bound: 置信区间下限（秒）
@@ -18,7 +18,8 @@ class WeibullSampler:
         self.upper = upper_bound
         self.confidence = confidence
         self.default = default
-
+        if seed is not None:
+            np.random.seed(seed)  # 设置全局随机种子以保证可重复性
         # 计算分布参数
         self.shape, self.scale = self.calculate_parameters()
 
@@ -87,69 +88,71 @@ class WeibullSampler:
     def cdf(self, t):
         """计算累积分布函数值"""
         return 1 - np.exp(-(t / self.scale) ** self.shape)
+    #
+    # def plot_distribution(self, samples):
+    #     """绘制分布图"""
+    #     # 生成样本
+    #     plt.figure(figsize=(12, 8))
+    #
+    #     # 直方图
+    #     plt.subplot(2, 1, 1)
+    #     hist, bins, _ = plt.hist(samples, bins=100, density=True, alpha=0.7, color='skyblue')
+    #     plt.title(f'Weibull Distribution (k={self.shape:.3f}, λ={self.scale:.3f})')
+    #     plt.xlabel('Delay Time (seconds)')
+    #     plt.ylabel('Probability Density')
+    #     plt.grid(True, linestyle='--', alpha=0.7)
+    #
+    #     # 添加置信区间标记
+    #     plt.axvline(x=self.lower, color='red', linestyle='--', label=f'Lower bound ({self.lower}s)')
+    #     plt.axvline(x=self.upper, color='green', linestyle='--', label=f'Upper bound ({self.upper}s)')
+    #     plt.fill_betweenx([0, max(hist)], self.lower, self.upper, color='yellow', alpha=0.2,
+    #                       label=f'{self.confidence * 100:.1f}% Confidence Interval')
+    #
+    #     # 添加理论PDF曲线
+    #     t = np.linspace(max(1, self.lower / 10), min(self.upper * 2, np.max(samples)), 1000)
+    #     pdf_vals = self.pdf(t)
+    #     plt.plot(t, pdf_vals, 'r-', linewidth=2, label='PDF')
+    #
+    #     plt.legend()
+    #     plt.xlim(0, self.upper * 1.5)
+    #
+    #     # 累积分布函数图
+    #     plt.subplot(2, 1, 2)
+    #     sorted_samples = np.sort(samples)
+    #     cdf_vals = np.arange(1, len(sorted_samples) + 1) / len(sorted_samples)
+    #     plt.plot(sorted_samples, cdf_vals, 'b-', linewidth=1, label='Empirical CDF')
+    #
+    #     # 理论CDF
+    #     theoretical_cdf = self.cdf(t)
+    #     plt.plot(t, theoretical_cdf, 'r--', label='Theoretical CDF')
+    #
+    #     # 标记置信区间
+    #     plt.axvline(x=self.lower, color='red', linestyle='--')
+    #     plt.axvline(x=self.upper, color='green', linestyle='--')
+    #     plt.axhline(y=(1 - self.confidence) / 2, color='gray', linestyle=':')
+    #     plt.axhline(y=1 - (1 - self.confidence) / 2, color='gray', linestyle=':')
+    #     plt.text(self.lower, 0.05, f'{(1 - self.confidence) / 2 * 100:.1f}%', fontsize=10, ha='right')
+    #     plt.text(self.upper, 0.95, f'{(1 - (1 - self.confidence) / 2) * 100:.1f}%', fontsize=10)
+    #
+    #     plt.title('Cumulative Distribution Function (CDF)')
+    #     plt.xlabel('Delay Time (seconds)')
+    #     plt.ylabel('Cumulative Probability')
+    #     plt.grid(True, linestyle='--', alpha=0.7)
+    #     plt.legend()
+    #     plt.xlim(0, self.upper * 1.5)
+    #
+    #     plt.tight_layout()
+    #     plt.show()
+    #
+    #     return samples
 
-    def plot_distribution(self, samples):
-        """绘制分布图"""
-        # 生成样本
-        plt.figure(figsize=(12, 8))
-
-        # 直方图
-        plt.subplot(2, 1, 1)
-        hist, bins, _ = plt.hist(samples, bins=100, density=True, alpha=0.7, color='skyblue')
-        plt.title(f'Weibull Distribution (k={self.shape:.3f}, λ={self.scale:.3f})')
-        plt.xlabel('Delay Time (seconds)')
-        plt.ylabel('Probability Density')
-        plt.grid(True, linestyle='--', alpha=0.7)
-
-        # 添加置信区间标记
-        plt.axvline(x=self.lower, color='red', linestyle='--', label=f'Lower bound ({self.lower}s)')
-        plt.axvline(x=self.upper, color='green', linestyle='--', label=f'Upper bound ({self.upper}s)')
-        plt.fill_betweenx([0, max(hist)], self.lower, self.upper, color='yellow', alpha=0.2,
-                          label=f'{self.confidence * 100:.1f}% Confidence Interval')
-
-        # 添加理论PDF曲线
-        t = np.linspace(max(1, self.lower / 10), min(self.upper * 2, np.max(samples)), 1000)
-        pdf_vals = self.pdf(t)
-        plt.plot(t, pdf_vals, 'r-', linewidth=2, label='PDF')
-
-        plt.legend()
-        plt.xlim(0, self.upper * 1.5)
-
-        # 累积分布函数图
-        plt.subplot(2, 1, 2)
-        sorted_samples = np.sort(samples)
-        cdf_vals = np.arange(1, len(sorted_samples) + 1) / len(sorted_samples)
-        plt.plot(sorted_samples, cdf_vals, 'b-', linewidth=1, label='Empirical CDF')
-
-        # 理论CDF
-        theoretical_cdf = self.cdf(t)
-        plt.plot(t, theoretical_cdf, 'r--', label='Theoretical CDF')
-
-        # 标记置信区间
-        plt.axvline(x=self.lower, color='red', linestyle='--')
-        plt.axvline(x=self.upper, color='green', linestyle='--')
-        plt.axhline(y=(1 - self.confidence) / 2, color='gray', linestyle=':')
-        plt.axhline(y=1 - (1 - self.confidence) / 2, color='gray', linestyle=':')
-        plt.text(self.lower, 0.05, f'{(1 - self.confidence) / 2 * 100:.1f}%', fontsize=10, ha='right')
-        plt.text(self.upper, 0.95, f'{(1 - (1 - self.confidence) / 2) * 100:.1f}%', fontsize=10)
-
-        plt.title('Cumulative Distribution Function (CDF)')
-        plt.xlabel('Delay Time (seconds)')
-        plt.ylabel('Cumulative Probability')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
-        plt.xlim(0, self.upper * 1.5)
-
-        plt.tight_layout()
-        plt.show()
-
-        return samples
-
-
+    def get_delay_list(self, n=500):
+        delay_list = [self.get_delay()  for _ in range(n)]
+        return delay_list
 
 
 class LogNormalSampler:
-    def __init__(self, lower_bound=60, upper_bound=1920, confidence=0.995, default=60):
+    def __init__(self, lower_bound=60, upper_bound=1920, confidence=0.995, default=60, seed=42):
         """
         初始化威布尔分布采样器
         :param lower_bound: 置信区间下限（秒）
@@ -160,7 +163,8 @@ class LogNormalSampler:
         self.upper = upper_bound
         self.confidence = confidence
         self.default = default
-
+        if seed is not None:
+            np.random.seed(seed)  # 设置全局随机种子以保证可重复性
     def get_delay(self, ):
         """
         生成服从对数正态分布的延迟时间样本，95%的样本落在60秒到1920秒之间
@@ -194,6 +198,11 @@ class LogNormalSampler:
 
         return min(max(T - self.default, self.lower), self.upper)
 
+    def get_delay_list(self, n=500):
+        delay_list = [self.get_delay()  for _ in range(n)]
+        return delay_list
+
+
 
 
 def get_delay_sampler(script_args):
@@ -210,6 +219,44 @@ def get_delay_sampler(script_args):
                          default=script_args.default_delay,
                          )
 
+class NoDelaySampler:
+    def __init__(self, lower_bound=60, upper_bound=1920, confidence=0.995, default=60, seed=42):
+        """
+        初始化威布尔分布采样器
+        :param lower_bound: 置信区间下限（秒）
+        :param upper_bound: 置信区间上限（秒）
+        :param confidence: 置信度 (0-1之间)
+        """
+        self.lower = lower_bound
+        self.upper = upper_bound
+        self.confidence = confidence
+        self.default = default
+        if seed is not None:
+            np.random.seed(seed)  # 设置全局随机种子以保证可重复性
+    def get_delay(self, ):
+        return 0.0
+
+    def get_delay_list(self, n=500):
+        delay_list = [self.get_delay()  for _ in range(n)]
+        return delay_list
+
+
+
+
+def get_delay_sampler(script_args):
+    SAMPLER_FUNCS_REGISTRY = {
+        "lognormal": LogNormalSampler,
+        "weibull": WeibullSampler,
+        "nodelay": NoDelaySampler,
+    }
+    assert script_args.delay_sampler in SAMPLER_FUNCS_REGISTRY
+    delay_sampler = SAMPLER_FUNCS_REGISTRY[script_args.delay_sampler]
+
+    return delay_sampler(lower_bound=script_args.lower_bound,
+                         upper_bound=script_args.upper_bound,
+                         confidence=script_args.confidence,
+                         default=script_args.default_delay,
+                         )
 
 #
 # if __name__ == "__main__":

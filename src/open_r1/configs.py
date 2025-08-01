@@ -173,6 +173,47 @@ class GRPOScriptArguments(trl.ScriptArguments):
         },
     )
 
+@dataclass
+class MoISScriptArguments(GRPOScriptArguments):
+    """
+    Script arguments for the MoIS training script.
+    """
+    delay_sampler: str = field(
+        default="lognormal",
+        metadata={
+            "help": "时间延迟分布 P(t)",
+            "choices": ["lognormal", "weibull"],
+        },
+    )
+    lower_bound: float = field(
+        default=60.0,
+        metadata={"help": "时间延迟下界"},
+    )
+    upper_bound: float = field(
+        default=1920,
+        metadata={"help": "时间延迟上界"},
+    )
+    confidence: float = field(
+        default=0.995,
+        metadata={"help": "时间延迟采样器的置信度"},
+    )
+    default_delay: float = field(
+        default=60.0,
+        metadata={"help": "时间延迟-基础时间延迟 服从于时间延迟分布 P(t)"},
+    )
+    sampler_id: int = field(
+        default=0,
+        metadata={"help": "The id of current sampler."},
+    )
+    num_samplers: int = field(
+        default=1,
+        metadata={"help": "The amount of samplers."},
+    )
+    online_mode: bool = field(
+        default=False, 
+        metadata={"help": "Whether force the sampler to use the latest weight for sampling."},
+    )
+
 
 @dataclass
 class AsyGPGScriptArguments(trl.ScriptArguments):

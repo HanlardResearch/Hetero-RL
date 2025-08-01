@@ -7,7 +7,7 @@ import torch.nn as nn
 from transformers import TrainerCallback, TrainingArguments
 from typing import Optional, Dict, Any
 import os
-
+from trl.extras.profiling import profiling_decorator
 import time
 import uuid
 from pathlib import Path
@@ -21,8 +21,8 @@ def setup_fs_queue(base_path: str):
     processing_dir.mkdir(parents=True, exist_ok=True)
     return queue_dir, processing_dir
 
-
-def push_to_fs_queue(queue_dir: Path, data: Dict[str, Any], time_save, rank):
+@profiling_decorator
+def push_to_fs_queue(self, queue_dir: Path, data: Dict[str, Any], time_save, rank):
     """
     将包含 PyTorch 张量的数据字典原子地写入文件队列。
     使用 torch.save 进行序列化。
@@ -50,8 +50,8 @@ def push_to_fs_queue(queue_dir: Path, data: Dict[str, Any], time_save, rank):
     os.rename(tmp_path, final_path)
     print(f"文件保存在: {final_path}")
 
-
-def pop_from_fs_queue(queue_dir: Path, processing_dir: Path, rank: int, timeout: int = 600) -> Optional[Dict[str, Any]]:
+@profiling_decorator
+def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, timeout: int = 600) -> Optional[Dict[str, Any]]:
     """
     原子地从文件队列中获取一个文件，使用 torch.load 读取，并返回其内容。
     这是一个阻塞式操作，为多进程消费者设计。
@@ -123,7 +123,7 @@ class SamplerSyncCallback(TrainerCallback):
         self.sync_steps = sync_steps
         self.last_synced_step = -1
 
-    def on_step_end(self, args: TrainingArguments, state, control, model: nn.Module, **kwargs):
+    def on_step_begin(self, args: TrainingArguments, state, control, model: nn.Module, **kwargs):
         """
         在每个梯度更新步骤的末尾被调用。
         """

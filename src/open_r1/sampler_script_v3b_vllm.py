@@ -450,16 +450,16 @@ class SamplerGPGTrainer(GPGTrainer):
 
             # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
             # completions may be distributed across processes
-            rewards_per_func = gather(rewards_per_func) # [32,]
+            rewards_per_func = gather(rewards_per_func)
 
             ########################################## 使用acc_reward 计算方差 ################################################
             # Apply weights to each reward function's output and sum
-            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)# [32,]
+            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
             acc_rewards = rewards_per_func[:,0] # 第一个奖励函数是 'accuracy_lv35'
 
             # Compute grouped-wise rewards
-            mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # [4,1]
-            mean_grouped_acc_rewards = acc_rewards.view(-1, self.num_generations).mean(dim=1) #备用 # [4,1]
+            mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+            mean_grouped_acc_rewards = acc_rewards.view(-1, self.num_generations).mean(dim=1) #备用
 
             # calculate data weight based on acc reward
             mean_grouped_rewards_cpu = mean_grouped_rewards.cpu().numpy()
@@ -467,42 +467,42 @@ class SamplerGPGTrainer(GPGTrainer):
             for i, p in enumerate(ordered_set_of_problems):
                 self.data_weight[mode][p].append(float(mean_grouped_rewards_cpu[i]))
 
-            stds = rewards.view(-1, self.num_generations).std(dim=1) # [4,1]
-            acc_stds = acc_rewards.view(-1, self.num_generations).std(dim=1) #备用 # [4,1]
+            stds = rewards.view(-1, self.num_generations).std(dim=1)
+            acc_stds = acc_rewards.view(-1, self.num_generations).std(dim=1) #备用
 
             # 找出标准差为 0 的组 (根据acc_reward)
             # identical_value_mask = stds == 0 #
-            identical_value_mask = acc_stds == 0 # [4,1]
-            easy_mask = mean_grouped_acc_rewards == 1 # [4,1]
-            hard_mask = mean_grouped_acc_rewards == 0 # [4,1]
+            identical_value_mask = acc_stds == 0
+            easy_mask = mean_grouped_acc_rewards == 1
+            hard_mask = mean_grouped_acc_rewards == 0
 
             # 计算标准差为 0 的组的数目
-            num_identical_reward_groups = identical_value_mask.sum().item() #[1,]
-            num_easy_problem = easy_mask.sum().item() #[1,]
-            num_hard_problem = hard_mask.sum().item() #[1,]
-            num_samples = stds.numel() #[1,] :=4
+            num_identical_reward_groups = identical_value_mask.sum().item()
+            num_easy_problem = easy_mask.sum().item()
+            num_hard_problem = hard_mask.sum().item()
+            num_samples = stds.numel()
 
             # 判断是否符合min_inverse_alpha要求，如果不符合，继续取样本；如果符合，进入后续计算。
-            n_valid_samples += num_samples - num_identical_reward_groups # :~ [0,4]
+            n_valid_samples += num_samples - num_identical_reward_groups
 
             # 每个worker组装自己部分的tensor
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
-            ) #[8,]
-            my_rewards = rewards[process_slice] #[8,]
-            my_acc_rewards = acc_rewards[process_slice] #[8,]
+            )
+            my_rewards = rewards[process_slice]
+            my_acc_rewards = acc_rewards[process_slice]
 
             # my_rewards_stds = my_rewards.view(-1, self.num_generations).std(dim=1)
-            my_acc_rewards_stds = my_acc_rewards.view(-1, self.num_generations).std(dim=1) #[1,]
+            my_acc_rewards_stds = my_acc_rewards.view(-1, self.num_generations).std(dim=1)
 
             # 这个mask必须对应于acc_reward
-            my_identical_value_mask = torch.where(my_acc_rewards_stds == 0)[0] #[1,]
-            my_valid_value_mask = torch.where(my_acc_rewards_stds > 0)[0] #[1,]
+            my_identical_value_mask = torch.where(my_acc_rewards_stds == 0)[0]
+            my_valid_value_mask = torch.where(my_acc_rewards_stds > 0)[0]
 
-            num_questions = len(prompts) // self.num_generations #[1,] :=1
-            _b_valid = my_valid_value_mask.shape[0] * self.num_generations # [1,]:= 0 or 8
-            _b_ident = my_identical_value_mask.shape[0] * self.num_generations # [1,]:= 0 or 8
+            num_questions = len(prompts) // self.num_generations
+            _b_valid = my_valid_value_mask.shape[0] * self.num_generations
+            _b_ident = my_identical_value_mask.shape[0] * self.num_generations
             assert _b_ident + _b_valid == len(prompts)
             ########################################## 使用acc_reward 计算方差 ################################################
 
@@ -531,7 +531,7 @@ class SamplerGPGTrainer(GPGTrainer):
             else:
                 identical_rewards, identical_prompt_ids, identical_prompt_mask, identical_completion_ids, identical_completion_mask = [None] * 5
 
-            new_rewards = merge(valid_rewards, new_rewards)# always 有效
+            new_rewards = merge(valid_rewards, new_rewards)
             new_prompt_mask = merge_with_padding(valid_prompt_mask, new_prompt_mask, 0, left_pad=True)
             new_prompt_ids = merge_with_padding(valid_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)
             new_completion_mask = merge_with_padding(valid_completion_mask, new_completion_mask, 0, left_pad=False)
@@ -545,7 +545,7 @@ class SamplerGPGTrainer(GPGTrainer):
             else:
                 # 重新组装样本batch
                 merge_rewards = merge(identical_rewards, new_rewards)
-                rewards =merge_rewards[:len(prompts)] # [8,]
+                rewards =merge_rewards[:len(prompts)]
                 prompt_ids = merge_with_padding(identical_prompt_ids, new_prompt_ids, self.processing_class.pad_token_id, left_pad=True)[:len(prompts)]
                 prompt_mask = merge_with_padding(identical_prompt_mask, new_prompt_mask, 0, left_pad=True)[:len(prompts)]
                 completion_ids = merge_with_padding(identical_completion_ids, new_completion_ids, self.processing_class.pad_token_id, left_pad=False)[:len(prompts)]
@@ -556,14 +556,14 @@ class SamplerGPGTrainer(GPGTrainer):
         if mode=="train":
             assert n_gen < max_gen
 
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # [1, ]
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # [1, ]
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         g_mean_grouped_rewards = mean_grouped_rewards
         g_std_grouped_rewards = std_grouped_rewards
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = rewards - mean_grouped_rewards # [8, ]
+        advantages = rewards - mean_grouped_rewards
         if self.args.scale_rewards:
             advantages = advantages / (std_grouped_rewards + 1e-4)
 

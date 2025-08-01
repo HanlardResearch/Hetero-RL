@@ -877,7 +877,7 @@ def main(script_args, training_args, model_args):
     reward_funcs = get_reward_funcs(script_args)
 
     # Format into conversation
-    def make_conversation(example,add_think=True):
+    def make_conversation(example,add_think=False):
         prompt = example["problem"] + " The reasoning process MUST BE enclosed within <think> and </think> tags. Please reason step by step, and put your final answer within \\boxed{}."
         if add_think:
             prompt += " /think"

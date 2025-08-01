@@ -22,7 +22,6 @@ import datasets
 import torch
 import transformers
 from datasets import load_dataset
-from gitdb.fun import delta_types
 from transformers.trainer_utils import get_last_checkpoint
 from open_r1.configs import GRPOConfig, GRPOScriptArguments, GPGConfig
 from open_r1.rewards import get_reward_funcs
@@ -648,7 +647,6 @@ class SamplerGPGTrainer(GPGTrainer):
                 logger.info(f"[Sampler Rank-{self.rank}] Detected new weights from {self.sync_weights_path}. Loading...")
 
                 global_step, state_dict = torch.load(self.sync_weights_path, map_location="cpu") # d20250717修改
-
                 self.model.load_state_dict(state_dict)
                 self._move_model_to_vllm()
                 self.last_sync_time = current_mtime
