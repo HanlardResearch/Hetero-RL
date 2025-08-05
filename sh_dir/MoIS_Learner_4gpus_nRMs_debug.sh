@@ -4,13 +4,12 @@ scriptname=$1
 xth=$2
 export SYNC_SAMPLER_STEPS=$3
 cfg=$4
-wandb_name=$5
 ########################## parameters ##########################
 log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/AsyncGRPO/learner/$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
 
 
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/AsyncGRPO/learner
+export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/AsyncGRPO/learner/debug
 export USE_FLASH_ATTN=true
 export PYTHONPATH=/userhome/Research_HUB/GPG/open-r1/src
 export WORLD_SIZE=1
@@ -46,8 +45,6 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --per_device_eval_batch_size 16 \
   --gradient_accumulation_steps 8 \
   --num_generations 8 \
-  --epsilon 0.0 --epsilon_high 0.8 \
-  --wandb_name $wandb_name \
-  --eval_on_start True > $log_path 2>&1
+  --eval_on_start False
 
 

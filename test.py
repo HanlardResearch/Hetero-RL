@@ -1,6 +1,9 @@
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
+# from transformers import AutoTokenizer
+# from vllm import LLM, SamplingParams
 
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+from vllm import LLM, SamplingParams
 # Initialize the tokenizer
 tokenizer = AutoTokenizer.from_pretrained("/extrahome0/HF_models/Qwen/Qwen3-1.7B")
 
@@ -34,3 +37,67 @@ for output in outputs:
     print(f"Prompt: {prompt!r}")
     print("*"*100)
     print(f"Generated text: {generated_text!r}")
+
+
+
+
+# ==============================
+# Step 2: Transformers Inference (New part)
+# ==============================
+print("\n=== Transformers Inference ===")
+
+# Load model and tokenizer
+model_id = "/extrahome0/HF_models/Qwen/Qwen3-1.7B"  # 或者使用本地路径 "/extrahome0/HF_models/Qwen/Qwen3-1.7B"
+tokenizer_tr = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+model_tr = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    torch_dtype=torch.bfloat16,  # Qwen3 推荐使用 bfloat16
+    device_map="auto",
+    trust_remote_code=True
+)
+
+# 使用相同的 messages 构造输入
+messages_tr = [
+    {"role": "user", "content": prompt}
+]
+
+# 使用 tokenizer 构造输入（必须与 vLLM 一致）
+input_text = tokenizer_tr.apply_chat_template(
+    messages_tr,
+    tokenize=False,
+    add_generation_prompt=True,
+)
+
+print(f"Prompt (transformers):\n{input_text}\n")
+
+# Tokenize
+inputs = tokenizer_tr(input_text, return_tensors="pt", padding=True, truncation=True).to(model_tr.device)
+
+# Generate
+with torch.no_grad():
+    outputs_tr = model_tr.generate(
+        **inputs,
+        max_new_tokens=2048,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=20,
+        do_sample=True,
+        pad_token_id=tokenizer_tr.eos_token_id  # 防止警告
+    )
+
+# Decode only the new tokens (excluding input prompt)
+generated_tokens = outputs_tr[0][inputs['input_ids'].shape[-1]:]
+generated_text_tr = tokenizer_tr.decode(generated_tokens, skip_special_tokens=True)
+
+print(f"Transformers Generated text:\n{generated_text_tr}\n")
+print("*" * 100)
+
+# Optional: 对比输出
+print("=== Direct Comparison ===")
+print("vLLM Output:")
+print(generated_text)
+print("\n" + "-"*50)
+print("Transformers Output:")
+print(generated_text_tr)
+
+# 检查是否完全相同（通常不会完全一样，因为采样有随机性，但结构应相似）

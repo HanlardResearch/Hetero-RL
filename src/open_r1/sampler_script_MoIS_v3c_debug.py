@@ -270,6 +270,30 @@ class SamplerGRPOTrainer(GRPOTrainer):
             all_logps.append(logps)
         return torch.cat(all_logps, dim=0)
 
+    @profiling_decorator
+    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+        batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
+        all_logps = []
+        all_logps_wo_divide_temp = []
+        for i in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[i : i + batch_size]
+            attention_mask_batch = attention_mask[i : i + batch_size]
+
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            logits = model(
+                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+            ).logits
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            input_ids_batch = input_ids_batch[:, -logits_to_keep:]
+            # Divide logits by sampling temperature.
+            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+            wo_divide_temp_logps = selective_log_softmax(logits, input_ids_batch)
+            all_logps_wo_divide_temp.append(wo_divide_temp_logps)
+            logits = logits / self.temperature
+            logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
+            all_logps.append(logps)
+        return torch.cat(all_logps, dim=0), torch.cat(all_logps_wo_divide_temp, dim=0)
+
     def generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
@@ -297,7 +321,9 @@ class SamplerGRPOTrainer(GRPOTrainer):
             prompts_text = [
                 re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
             ]
-
+        # if self.accelerator.is_main_process:
+	    #     print('Waiting for debugger'); import debugpy; debugpy.listen(('localhost', 5678 + int(os.getenv('RANK', '0')))); debugpy.wait_for_client()
+        
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
             # First, have main process load weights if needed
@@ -322,8 +348,8 @@ class SamplerGRPOTrainer(GRPOTrainer):
                 "guided_decoding": guided_decoding,
 
             }
-            # if self.loss_type in ["mois","is_bnpo" ]:
-            #     generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
+            if self.loss_type in ["mois","is_bnpo" ]:
+                generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
 
             if self.args.generation_kwargs is not None:
                 generation_kwargs.update(self.args.generation_kwargs)
@@ -345,19 +371,19 @@ class SamplerGRPOTrainer(GRPOTrainer):
 
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
-            # ################# 记录采样器的生成概率 #####################
-            # if self.loss_type in ["mois","is_bnpo" ]:
-            #     tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
-            #     # 一行搞定提取 + 转 tensor
-            #     logprob_tensors = [
-            #         torch.tensor([next(iter(item.values())).logprob for item in a[0]],
-            #                      device=self.model.device, dtype=self.model.dtype)
-            #         for a in tmp
-            #     ]
-            #     sampler_per_token_logps = pad_sequence(logprob_tensors, batch_first=True, padding_value=float('-inf'))
-            # else:
-            #     sampler_per_token_logps=None
-            # ################# 记录采样器的生成概率 #####################
+            ################# 记录采样器的生成概率 #####################
+            if self.loss_type in ["mois","is_bnpo" ]:
+                tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
+                # 一行搞定提取 + 转 tensor
+                logprob_tensors = [
+                    torch.tensor([next(iter(item.values())).logprob for item in a[0]],
+                                 device=self.model.device, dtype=self.model.dtype)
+                    for a in tmp
+                ]
+                sampler_per_token_logps = pad_sequence(logprob_tensors, batch_first=True, padding_value=float('-inf'))
+            else:
+                sampler_per_token_logps=None
+            ################# 记录采样器的生成概率 #####################
 
 
             if self.vllm_tensor_parallel_size > 1:
@@ -425,12 +451,11 @@ class SamplerGRPOTrainer(GRPOTrainer):
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
             else:
-                old_per_token_logps = None
+                # old_per_token_logps = None
+                old_per_token_logps, old_per_token_logps_wo_divide_temp = self._get_per_token_logps(
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                )
 
-            sampler_per_token_logps = self._get_per_token_logps(
-                self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-            ) if self.loss_type in ["mois","is_bnpo" ] else None
-            
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:

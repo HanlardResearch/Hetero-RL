@@ -67,7 +67,7 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
             time.sleep(0.1)  # 队列为空，短暂等待后重试
             continue
 
-        # 2. 尝试获取第一个文件
+        # 2. 尝试获取最旧一个文件
         source_path = files[0]
 
         # 3. 【核心】通过原子重命名操作来“锁定”文件

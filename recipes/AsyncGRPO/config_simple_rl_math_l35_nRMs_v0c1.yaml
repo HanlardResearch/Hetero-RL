@@ -1,7 +1,6 @@
 
 # Model arguments
-model_name_or_path: models/Qwen2.5-Math-7B
-#model_name_or_path: Qwen/Qwen2.5-Math-7B
+model_name_or_path: /extrahome0/HF_models/Qwen/Qwen3-1.7B
 model_revision: main
 torch_dtype: bfloat16
 attn_implementation: flash_attention_2
@@ -10,15 +9,15 @@ attn_implementation: flash_attention_2
 #dataset_name: DigitalLearningGmbH/MATH-lighteval
 dataset_name: "datas/SimpleRL-Zoo-Data/simplelr_qwen_level3to5"
 dataset_config: "train.parquet"
-system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. The reasoning process MUST BE enclosed within <think> and </think> tags."
-# system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. Please put your final answer within \\boxed{}. Also, indicate that it is the answer."
+# system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. The reasoning process MUST BE enclosed within <think> and </think> tags."
+system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. Please put your final answer within \\boxed{}. Also, indicate that it is the answer."
 # GRPO trainer config
 beta: 0.0
 bf16: true
 use_vllm: true
 vllm_mode: "colocate"
 # vllm_device: auto
-vllm_gpu_memory_utilization: 0.25
+vllm_gpu_memory_utilization: 0.45
 do_eval: true
 eval_strategy: steps
 eval_steps: 33
@@ -26,7 +25,7 @@ gradient_accumulation_steps: 1
 gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
-hub_model_id: Qwen-2.5-7B-Simple-RL
+hub_model_id: Qwen3-1.7B
 hub_strategy: every_save
 learning_rate: 1.0e-06
 log_completions: false
@@ -49,8 +48,22 @@ report_to:
 - tensorboard
 reward_funcs:
 - accuracy_lv35
+- extra_box_v1
+- extra_box_v2
+- fused_format
+- tag_count
+- length
+- repetition_penalty
+- language_penalty
 reward_weights:
 - 1.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
 save_strategy: "steps"
 save_steps: 33
 seed: 42
@@ -58,4 +71,9 @@ warmup_ratio: 0.03
 temperature: 0.6
 top_p : 0.95
 top_k : 20
-loss_type : "pg"
+delay_sampler: "nodelay"
+lower_bound: 60
+upper_bound: 1920
+confidence: 0.995
+default_delay: 60
+loss_type: "is_bnpo"

@@ -120,6 +120,9 @@ def accuracy_reward_lv35(completions, solution, **kwargs):
                     ],
                     extraction_mode="first_match",
                 )
+                # print(f'answer_parsed:{answer_parsed}')
+                # if len(anxswer_parsed) == 0:
+                #     print(f"answer_parsed is None | content='{content}' | sol='{sol}'")
             except TimeoutError:
                 rank = dist.get_rank() if dist.is_initialized() else 0
                 print(f"[Rank {rank}] answer parse timeout | content='{content}' | sol='{sol}'")

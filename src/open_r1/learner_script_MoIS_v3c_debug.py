@@ -568,7 +568,9 @@ class Learner_MoISTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
-
+        if self.accelerator.is_main_process:
+            print('Waiting for debugger'); import debugpy; debugpy.listen(('localhost', 5678 + int(os.getenv('RANK', '0')))); debugpy.wait_for_client()
+    
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -1246,13 +1248,13 @@ class Learner_MoISTrainer(Trainer):
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
-
+        
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
+        
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
         # Compute the KL divergence between the model and the reference model
@@ -1261,8 +1263,6 @@ class Learner_MoISTrainer(Trainer):
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
-        # Log the metrics
-        mode = "train" if self.model.training else "eval"
 
         if self.loss_type in ["grpo", "bnpo","dr_grpo"]:
 
@@ -1276,10 +1276,6 @@ class Learner_MoISTrainer(Trainer):
             )
             coef_1 = torch.exp(per_token_logps - old_per_token_logps)
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-
-            self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
-            self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
-            self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
 
             # Two-sided clipping
             if self.args.delta is not None:
@@ -1307,18 +1303,14 @@ class Learner_MoISTrainer(Trainer):
                                           )
                 loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
             elif self.loss_type == "pg":
-                per_token_loss = -per_token_logps * advantages.unsqueeze(1)
+                per_token_loss = self.get_PG_loss(advantages=advantages,
+                                        learner_per_token_logps=per_token_logps,
+                                        )
                 loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-                return loss
             elif self.loss_type == "is_bnpo":
                 assert inputs["sampler_per_token_logps"] is not None
                 old_per_token_logps = inputs["sampler_per_token_logps"]
                 coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-
-                self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
-                self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
-                self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
-
                 coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
                 # Two-sided clipping
                 if self.args.delta is not None:
@@ -1327,11 +1319,11 @@ class Learner_MoISTrainer(Trainer):
                 per_token_loss2 = coef_2 * advantages.unsqueeze(1)
                 per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
                 loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-
             else:
                 raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-
+        # Log the metrics
+        mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
@@ -1385,7 +1377,7 @@ class Learner_MoISTrainer(Trainer):
         if is_sagemaker_mp_enabled():
             loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
             return loss_mb.reduce_mean().detach().to(self.args.device)
-
+        
         with self.compute_loss_context_manager():
             loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
 
@@ -1472,6 +1464,7 @@ class Learner_MoISTrainer(Trainer):
         #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
         #   - Completions are generated for each batch without buffering or reuse
         # Returns a single local batch in both cases.
+        
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
@@ -1843,15 +1836,6 @@ def main(script_args, training_args, model_args):
 
     if "wandb" in training_args.report_to:
         init_wandb_training(training_args)
-        if training_args.local_rank==0:
-            current_file_path = __file__
-            current_file_name = os.path.basename(current_file_path)
-            wandb.login()
-            wandb.init(project=os.environ["WANDB_PROJECT"],
-                       entity = os.environ["WANDB_ENTITY"],
-                       # config=dict(training_args),
-                       name=script_args.wandb_name if script_args.wandb_name is not None else current_file_name,
-                       )
 
 
     ################

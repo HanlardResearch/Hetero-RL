@@ -3,13 +3,12 @@ formatted_time=$(date "+%Y%m%d-%H-%M-%S")
 scriptname=$1
 xth=$2
 cfg=$3
-wandb_name=$4
-sampler_id=$5
+sampler_id=$4
 ########################## parameters ##########################
-log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/AsyncGRPO/sampler/$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
-echo $log_path
+# log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/AsyncGRPO/sampler/$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
+# echo $log_path
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/AsyncGRPO/sampler
+export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/AsyncGRPO/sampler/debug
 export USE_FLASH_ATTN=true
 export PYTHONPATH=/userhome/Research_HUB/GPG/open-r1/src
 export WORLD_SIZE=1
@@ -29,19 +28,19 @@ fi
 if [[ $sampler_id -eq 0 ]]; then
   export CUDA_VISIBLE_DEVICES="0,1,2,3"
   export MASTER_PORT=29521
-  vllm_gpu_memory_utilization=0.3
+  vllm_gpu_memory_utilization=0.45
 elif [[ $sampler_id -eq 1 ]]; then
   export CUDA_VISIBLE_DEVICES="0,1,2,3"
   export MASTER_PORT=29522
-  vllm_gpu_memory_utilization=0.6
+  vllm_gpu_memory_utilization=0.90
 elif [[ $sampler_id -eq 2 ]]; then
   export CUDA_VISIBLE_DEVICES="4,5,6,7"
   export MASTER_PORT=29523
-  vllm_gpu_memory_utilization=0.3
+  vllm_gpu_memory_utilization=0.45
 elif [[ $sampler_id -eq 3 ]]; then
   export CUDA_VISIBLE_DEVICES="4,5,6,7"
   export MASTER_PORT=29524
-  vllm_gpu_memory_utilization=0.6
+  vllm_gpu_memory_utilization=0.90
 fi
 #rm $SYNC_WEIGHTS_PATH
 #echo "rm$SYNC_WEIGHTS_PATH"
@@ -59,6 +58,5 @@ accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --num_generations 8 \
   --wandb_entity "pcl-zh" --wandb_project "GPG"  --report_to "wandb" \
   --config recipes/AsyncGRPO/config_simple_rl_math_l35_nRMs_$3.yaml \
-  --num_samplers 4 --sampler_id $sampler_id \
-  --wandb_name $wandb_name \
-  --vllm_gpu_memory_utilization $vllm_gpu_memory_utilization > $log_path 2>&1
+  --num_samplers 1 --sampler_id $sampler_id \
+  --vllm_gpu_memory_utilization $vllm_gpu_memory_utilization

@@ -6,11 +6,11 @@
 cd /userhome/Research_HUB/GPG/open-r1
 
 # 先启动学习器
-bash sh_dir/MoIS_Learner_4gpus_nRMs.sh learner_script_MoIS_v3c MoISv3_7th 1 v0c &
+bash sh_dir/MoIS_Learner_4gpus_nRMs.sh learner_script_MoIS_v3c MoISv3_7th 1 v0c1 is_bnpo_prompt_clip_enhanced_1L4S &
 
 # 再按顺序依次启动采样器
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c 0 &
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c 1 &
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c 2 &
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c 3 &
+bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 0 &
+bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 1 &
+bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 2 &
+bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 3 &
 ```

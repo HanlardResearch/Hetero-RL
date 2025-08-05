@@ -172,6 +172,10 @@ class GRPOScriptArguments(trl.ScriptArguments):
             "help": "for each generation, evaluate these many test cases in parallel, then check if any of them failed (0 score): if so stop evaluating; otherwise continue with the next batch of test cases. Useful to avoid overloading the eval server + save time on wrong solutions"
         },
     )
+    wandb_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "说明当前wandb-run的功能"},
+    )
 
 @dataclass
 class MoISScriptArguments(GRPOScriptArguments):
@@ -213,7 +217,10 @@ class MoISScriptArguments(GRPOScriptArguments):
         default=False, 
         metadata={"help": "Whether force the sampler to use the latest weight for sampling."},
     )
-
+    wandb_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "说明当前wandb-run的功能"},
+    )
 
 @dataclass
 class AsyGPGScriptArguments(trl.ScriptArguments):
