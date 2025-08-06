@@ -68,7 +68,8 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
             continue
 
         # 2. 尝试获取最旧一个文件
-        source_path = files[0]
+        # source_path = files[0]
+        source_path = files[-1]
 
         # 3. 【核心】通过原子重命名操作来“锁定”文件
         # 将文件从 'queue' 目录移动到 'processing' 目录，并加上 rank 标记。
