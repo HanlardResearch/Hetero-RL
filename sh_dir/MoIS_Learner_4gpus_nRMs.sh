@@ -46,8 +46,8 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --per_device_eval_batch_size 16 \
   --gradient_accumulation_steps 8 \
   --num_generations 8 \
-  --epsilon 0.0 --epsilon_high 0.8 \
   --wandb_name $wandb_name \
+  --ais_beta 0.2 \
   --eval_on_start True > $log_path 2>&1
 
 

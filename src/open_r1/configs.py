@@ -176,6 +176,10 @@ class GRPOScriptArguments(trl.ScriptArguments):
         default=None,
         metadata={"help": "说明当前wandb-run的功能"},
     )
+    ais_beta: float = field(
+        default=0.1,
+        metadata={"help": "用于控制退火权重的敏感度"},
+    )
 
 @dataclass
 class MoISScriptArguments(GRPOScriptArguments):

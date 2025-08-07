@@ -341,6 +341,7 @@ class Learner_MoISTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
+        ais_beta: float,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -394,7 +395,7 @@ class Learner_MoISTrainer(Trainer):
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
             model = self._enable_gradient_checkpointing(model, args)
-
+            
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
@@ -405,6 +406,7 @@ class Learner_MoISTrainer(Trainer):
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
+        self.ais_beta = ais_beta
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
@@ -550,6 +552,7 @@ class Learner_MoISTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self.last_model_id = -1
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
@@ -568,7 +571,7 @@ class Learner_MoISTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
-
+        
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -1247,6 +1250,7 @@ class Learner_MoISTrainer(Trainer):
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
 
+        # print(inputs)
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
@@ -1339,10 +1343,10 @@ class Learner_MoISTrainer(Trainer):
                 # if self.args.delta is not None:
                 #     coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-                # [1, AIS_len-1, num_generations]张量
-                history_adv = inputs['history_advs'].squeeze(0)
+                # [num_generations, AIS_len-1]张量
+                history_adv = inputs['history_advs']
                 #[num_generations,1]
-                AIS_weight = self.ais_beta * history_adv.sum(dim=0).unsqueeze(1)
+                AIS_weight = (self.ais_beta * history_adv.sum(dim=1).unsqueeze(dim=1)).exp()
 
                 coef_3 = AIS_weight * coef_1
                 coef_4 = torch.clamp(coef_3, 1 - self.epsilon_low, 1 + self.epsilon_high)
@@ -1563,7 +1567,9 @@ class Learner_MoISTrainer(Trainer):
                 raise e
 
             self._metrics = rollout_batch["metrics"]
+            self.last_model_id = rollout_batch["model_ids"]
             self._metrics[mode]['step_diff'] = [self.state.global_step - rollout_batch['model_ids']]
+            # print("learner_script_MoIS_v4.py line 1571", self._metrics)
             return rollout_batch
         # print(f"line 603 ")
         prompts = [x["prompt"] for x in inputs]
@@ -1609,7 +1615,7 @@ class Learner_MoISTrainer(Trainer):
                 "guided_decoding": guided_decoding,
             }
 
-            if self.loss_type in ["mois","is_bnpo" ]:
+            if "is" in self.loss_type:# is 代表重要性采样
                 generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
 
             if self.args.generation_kwargs is not None:
@@ -1631,7 +1637,7 @@ class Learner_MoISTrainer(Trainer):
 
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             ################# 记录采样器的生成概率 #####################
-            if self.loss_type in ["mois","is_bnpo" ]:
+            if "is" in self.loss_type:# is 代表重要性采样
                 tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
                 # 一行搞定提取 + 转 tensor
                 logprob_tensors = [
@@ -1643,6 +1649,8 @@ class Learner_MoISTrainer(Trainer):
             else:
                 sampler_per_token_logps = None
             ################# 记录采样器的生成概率 #####################
+
+
             if self.vllm_tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
                 # Each rank generates all outputs — we keep only our share.
@@ -1828,6 +1836,8 @@ class Learner_MoISTrainer(Trainer):
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
         ####################################### 0728 ###############################################
+        damp_history_advs = torch.zeros([self.args.per_device_eval_batch_size, 1],
+                                        dtype=self.model.dtype, device=self.model.device)
 
         return {
             "prompt_ids": prompt_ids,
@@ -1839,6 +1849,7 @@ class Learner_MoISTrainer(Trainer):
             "ref_per_token_logps": ref_per_token_logps,
             "model_ids": self.state.global_step, # 为了根据延迟计算lambdaT
             "sampler_per_token_logps": sampler_per_token_logps, # 训练时这个是采样器的logp，评估时为了不报错，这个是学习器的logp
+            "history_advs": damp_history_advs,
         }
 
 def main(script_args, training_args, model_args):
@@ -1946,6 +1957,7 @@ def main(script_args, training_args, model_args):
 
     trainer = Learner_MoISTrainer(
         model=model_args.model_name_or_path,
+        ais_beta=script_args.ais_beta,
         reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],

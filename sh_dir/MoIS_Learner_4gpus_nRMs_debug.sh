@@ -4,12 +4,13 @@ scriptname=$1
 xth=$2
 export SYNC_SAMPLER_STEPS=$3
 cfg=$4
+wandb_name=$5
 ########################## parameters ##########################
 log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/AsyncGRPO/learner/$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
 
 
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/AsyncGRPO/learner/debug
+export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/AsyncGRPO/learner
 export USE_FLASH_ATTN=true
 export PYTHONPATH=/userhome/Research_HUB/GPG/open-r1/src
 export WORLD_SIZE=1
@@ -24,8 +25,8 @@ export QUEUE_TIMEOUT_SECONDS=3600
 
 echo $log_path
 export CUDA_VISIBLE_DEVICES=0,1,2,3
-rm -r $FS_QUEUE_PATH
-rm $SYNC_WEIGHTS_PATH
+# rm -r $FS_QUEUE_PATH
+# rm $SYNC_WEIGHTS_PATH
 accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --num_machines $WORLD_SIZE --machine_rank $RANK  --num_processes=$GPUS  --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT \
   src/open_r1/$scriptname.py --output_dir $SAVEPATH \
@@ -45,6 +46,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --per_device_eval_batch_size 16 \
   --gradient_accumulation_steps 8 \
   --num_generations 8 \
+  --wandb_name $wandb_name \
   --eval_on_start False
 
 
