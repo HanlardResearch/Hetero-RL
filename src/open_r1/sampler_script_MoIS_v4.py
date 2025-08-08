@@ -428,7 +428,7 @@ class SamplerGRPOTrainer(GRPOTrainer):
 
             sampler_per_token_logps = self._get_per_token_logps(
                 self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-            ) if self.loss_type in ["mois","is_bnpo","ais_bnpo" ] else None
+            ) if self.loss_type in ["mois","is_bnpo"] else None
             
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:

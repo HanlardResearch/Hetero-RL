@@ -1332,8 +1332,8 @@ class Learner_MoISTrainer(Trainer):
                 per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
                 loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
             elif self.loss_type == "ais_bnpo":
-                assert inputs["sampler_per_token_logps"] is not None
-                old_per_token_logps = inputs["sampler_per_token_logps"]
+                # assert inputs["sampler_per_token_logps"] is not None
+                old_per_token_logps = per_token_logps.detach()
                 coef_1 = torch.exp(per_token_logps - old_per_token_logps)
                 self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
                 self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
@@ -1345,6 +1345,9 @@ class Learner_MoISTrainer(Trainer):
 
                 # [num_generations, AIS_len-1]张量
                 history_adv = inputs['history_advs']
+                AIS_track_len = history_adv.shape[1] if not torch.all(history_adv == 0) else 0
+
+
                 #[num_generations,1]
                 AIS_weight = (self.ais_beta * history_adv.sum(dim=1).unsqueeze(dim=1)).exp()
 
@@ -1355,9 +1358,11 @@ class Learner_MoISTrainer(Trainer):
                 self._metrics[mode]["AIS_weight/max"].append(nanmax(AIS_weight).item())
                 self._metrics[mode]["AIS_weight/min"].append(nanmin(AIS_weight).item())
 
-                self._metrics[mode]["ais_ratio/mean"].append(coef_3.nanmean().item())
-                self._metrics[mode]["ais_ratio/max"].append(nanmax(coef_3).item())
-                self._metrics[mode]["ais_ratio/min"].append(nanmin(coef_3).item())
+                self._metrics[mode]["ais_ratio/mean"].append(coef_4.nanmean().item())
+                self._metrics[mode]["ais_ratio/max"].append(nanmax(coef_4).item())
+                self._metrics[mode]["ais_ratio/min"].append(nanmin(coef_4).item())
+
+                self._metrics[mode]["AIS_track_len"].append(AIS_track_len)
 
 
                 per_token_loss3 = coef_3 * advantages.unsqueeze(1)
@@ -1615,7 +1620,7 @@ class Learner_MoISTrainer(Trainer):
                 "guided_decoding": guided_decoding,
             }
 
-            if "is" in self.loss_type:# is 代表重要性采样
+            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
                 generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
 
             if self.args.generation_kwargs is not None:
@@ -1637,7 +1642,8 @@ class Learner_MoISTrainer(Trainer):
 
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             ################# 记录采样器的生成概率 #####################
-            if "is" in self.loss_type:# is 代表重要性采样
+            # if "is" in self.loss_type:# is 代表重要性采样
+            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
                 tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
                 # 一行搞定提取 + 转 tensor
                 logprob_tensors = [
@@ -1961,7 +1967,8 @@ def main(script_args, training_args, model_args):
         reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=eval_dataset, #eval_dataset=eval_dataset.select(range(64)),
+        eval_dataset=eval_dataset,
+        # eval_dataset=eval_dataset.select(range(64)),
         peft_config=get_peft_config(model_args),
         callbacks=get_callbacks(training_args, model_args),
         processing_class=tokenizer,
