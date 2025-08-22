@@ -16,9 +16,9 @@ export WORLD_SIZE=1
 export RANK=0
 export GPUS=4
 export MASTER_ADDR="localhost"
-export SAVEPATH=/userhome/save_dir/AsyncGRPO/4gpus/Sampler_${xth}_cfg${cfg}/sampler${sampler_id}/Qwen3-1.7B
-export FS_QUEUE_PATH=/userhome/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/Rollout/Qwen3-1.7B
-export SYNC_WEIGHTS_PATH=/userhome/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/tmp/Qwen3-1.7B/gpg_async_weights.pt
+export SAVEPATH=/extrahome0/save_dir/AsyncGRPO/4gpus/Sampler_${xth}_cfg${cfg}/sampler${sampler_id}/Qwen3-1.7B
+export FS_QUEUE_PATH=/extrahome0/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/Rollout/Qwen3-1.7B
+export SYNC_WEIGHTS_PATH=/extrahome0/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/tmp/Qwen3-1.7B/gpg_async_weights.pt
 export SYNC_SAMPLER_STEPS=1
 
 if ! [[ "$sampler_id" =~ ^[0-3]$ ]]; then
@@ -29,19 +29,19 @@ fi
 if [[ $sampler_id -eq 0 ]]; then
   export CUDA_VISIBLE_DEVICES="0,1,2,3"
   export MASTER_PORT=29521
-  vllm_gpu_memory_utilization=0.45
+  vllm_gpu_memory_utilization=0.3
 elif [[ $sampler_id -eq 1 ]]; then
   export CUDA_VISIBLE_DEVICES="0,1,2,3"
   export MASTER_PORT=29522
-  vllm_gpu_memory_utilization=0.9
+  vllm_gpu_memory_utilization=0.6
 elif [[ $sampler_id -eq 2 ]]; then
   export CUDA_VISIBLE_DEVICES="4,5,6,7"
   export MASTER_PORT=29523
-  vllm_gpu_memory_utilization=0.45
+  vllm_gpu_memory_utilization=0.3
 elif [[ $sampler_id -eq 3 ]]; then
   export CUDA_VISIBLE_DEVICES="4,5,6,7"
   export MASTER_PORT=29524
-  vllm_gpu_memory_utilization=0.9
+  vllm_gpu_memory_utilization=0.6
 fi
 #rm $SYNC_WEIGHTS_PATH
 #echo "rm$SYNC_WEIGHTS_PATH"

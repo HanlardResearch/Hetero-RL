@@ -62,5 +62,5 @@ for sampler_id in 0 2 1 3; do
     --num_samplers 4 --sampler_id $sampler_id \
     --wandb_name $wandb_name \
     --vllm_gpu_memory_utilization $vllm_gpu_memory_utilization > $log_path 2>&1 &
-  sleep 1
+  sleep 2
 done

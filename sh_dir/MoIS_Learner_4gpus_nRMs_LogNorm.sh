@@ -18,15 +18,15 @@ export RANK=0
 export GPUS=4
 export MASTER_ADDR="localhost"
 export MASTER_PORT=29510
-export SAVEPATH=/userhome/save_dir/AsyncGRPO/4gpus/Learner_${xth}_cfg${cfg}/Qwen3-1.7B
-export FS_QUEUE_PATH=/userhome/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/Rollout/Qwen3-1.7B
-export SYNC_WEIGHTS_PATH=/userhome/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/tmp/Qwen3-1.7B/gpg_async_weights.pt
+export SAVEPATH=/extrahome0/save_dir/AsyncGRPO/4gpus/Learner_${xth}_cfg${cfg}/Qwen3-1.7B
+export FS_QUEUE_PATH=/extrahome0/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/Rollout/Qwen3-1.7B
+export SYNC_WEIGHTS_PATH=/extrahome0/save_dir/AsyncGRPO/4gpus/Async_${xth}_cfg${cfg}/tmp/Qwen3-1.7B/gpg_async_weights.pt
 export QUEUE_TIMEOUT_SECONDS=3600
 
 echo $log_path
 export CUDA_VISIBLE_DEVICES=0,1,2,3
-# rm -r $FS_QUEUE_PATH
-# rm $SYNC_WEIGHTS_PATH
+rm -r $FS_QUEUE_PATH
+rm $SYNC_WEIGHTS_PATH
 accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --num_machines $WORLD_SIZE --machine_rank $RANK  --num_processes=$GPUS  --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT \
   src/open_r1/$scriptname.py --output_dir $SAVEPATH \
@@ -48,8 +48,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --num_generations 8 \
   --wandb_name $wandb_name \
   --ais_beta 0.5 \
-  --cppo_beta 0.1 \
-  --max_diff_step 4 \
-  --eval_on_start False
+  --loss_type "ais_gspo" \
+  --eval_on_start False > $log_path 2>&1
 
 

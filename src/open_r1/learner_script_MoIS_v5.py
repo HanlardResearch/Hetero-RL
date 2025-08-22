@@ -26,6 +26,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.utils import is_peft_available
+import trl
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from trl.trainer.grpo_trainer import RepeatSampler
 from trl.extras.profiling import profiling_context, profiling_decorator
@@ -74,7 +75,7 @@ from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 from open_r1.utils.data_utils import custom_loading_dataset
 from transformers import TrainerCallback
 from pathlib import Path
-from async_utils import setup_fs_queue, pop_from_fs_queue,SamplerSyncCallback # 新增
+
 from trl.extras.profiling import profiling_decorator, profiling_context
 from transformers.utils import is_rich_available
 from typing import Any, Callable, Optional, Union
@@ -99,6 +100,8 @@ from packaging import version
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
 from torch.utils.data import DataLoader, Dataset, IterableDataset, RandomSampler, SequentialSampler
 
+#################################################################################################################
+from async_utils0809 import setup_fs_queue, pop_from_fs_queue,SamplerSyncCallback # 新增
 #################################################################################################################
 
 import os
@@ -344,6 +347,7 @@ class Learner_MoISTrainer(Trainer):
         ais_beta: float,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
+        script_args: Optional[trl.ScriptArguments] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -407,6 +411,7 @@ class Learner_MoISTrainer(Trainer):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
         self.ais_beta = ais_beta
+        self.script_args  =  script_args
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
@@ -1332,8 +1337,9 @@ class Learner_MoISTrainer(Trainer):
                 per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
                 loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
             elif self.loss_type == "ais_bnpo":
-                # assert inputs["sampler_per_token_logps"] is not None
-                old_per_token_logps = per_token_logps.detach()
+                assert inputs["sampler_per_token_logps"] is not None
+                # old_per_token_logps = per_token_logps.detach()
+                old_per_token_logps = inputs["sampler_per_token_logps"]
                 coef_1 = torch.exp(per_token_logps - old_per_token_logps)
                 self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
                 self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
@@ -1544,7 +1550,8 @@ class Learner_MoISTrainer(Trainer):
                 queue_dir=self.queue_dir,
                 processing_dir=self.processing_dir,
                 rank=self.rank,
-                timeout=self.queue_timeout
+                timeout=self.queue_timeout,
+                max_diff_step=self.script_args.max_diff_step
             )
 
             # 处理超时或队列为空的情况
@@ -1620,7 +1627,7 @@ class Learner_MoISTrainer(Trainer):
                 "guided_decoding": guided_decoding,
             }
 
-            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
+            if  self.loss_type in ["is_bnpo", "mois","ais_bnpo"]:# is 代表重要性采样
                 generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
 
             if self.args.generation_kwargs is not None:
@@ -1643,7 +1650,7 @@ class Learner_MoISTrainer(Trainer):
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             ################# 记录采样器的生成概率 #####################
             # if "is" in self.loss_type:# is 代表重要性采样
-            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
+            if  self.loss_type in ["is_bnpo", "mois", "ais_bnpo"]:# is 代表重要性采样
                 tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
                 # 一行搞定提取 + 转 tensor
                 logprob_tensors = [
@@ -1966,6 +1973,7 @@ def main(script_args, training_args, model_args):
         ais_beta=script_args.ais_beta,
         reward_funcs=reward_funcs,
         args=training_args,
+        script_args = script_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=eval_dataset,
         # eval_dataset=eval_dataset.select(range(64)),

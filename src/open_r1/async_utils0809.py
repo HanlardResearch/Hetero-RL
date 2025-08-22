@@ -55,6 +55,7 @@ def push_to_fs_queue(self, data: Dict[str, Any], time_save):
     # 这种方式可以防止消费者读到不完整的文件。
     final_filename = f"data_{int(time_save*1000)}_SamplerRank_{self.rank}_ModelID_{self.model_ids}_{uuid.uuid4().hex[:6]}.pt"
     final_path = self.queue_dir / final_filename
+    wait_for_everyone()
     os.rename(tmp_path, final_path)
     print(f"文件保存在: {final_path}")
 
@@ -70,6 +71,7 @@ def get_max_model_id(sorted_name_list, rank: int):
         return -1, None
     rank_pt_name_list = [file for file in sorted_name_list if get_rank_from_name(file.name) == rank]
     rank_model_ids_list = [get_model_id_from_name(file.name) for file in rank_pt_name_list]
+    assert len(rank_model_ids_list) != 0, f"rank_model_ids_list is {rank_model_ids_list}, but sorted_name_list is {sorted_name_list}, rank_pt_name_list is {rank_pt_name_list}"
     max_value = max(rank_model_ids_list)
     max_index = rank_model_ids_list.index(max_value)  # 最大值的索引
     return max_value, rank_pt_name_list[max_index]
@@ -81,62 +83,10 @@ def get_min_model_id(sorted_name_list, min_id, rank: int):
     for file in rank_pt_name_list:
         valid_id  = get_model_id_from_name(file.name)
         if valid_id >= min_id:
-            return valid_id, file.name
-
-def find_ais_track(processed_data_path: Path, queue_dir_max_model_id: int, min_id: int, rank: int, world_size: int = 4):
-    """
-    :param processed_data_path:
-    :param queue_dir_max_model_id:
-    :param min_id: 退火窗口内理论最旧数据（不一定存在）
-    :param rank:
-    :param world_size:
-    :return:
-    """
-    sorted_name_list = sorted(list(Path(processed_data_path).glob("data_*.pt")))
-    processed_max_model_id, file_path = get_max_model_id(sorted_name_list, rank)
-
-    # 直接学习新数据
-    if queue_dir_max_model_id > processed_max_model_id:
-        # print(f"【没有退火数据】data_model_id >= processed_max_model_id {data_model_id} >= {processed_max_model_id}")
-        return None, len(sorted_name_list), processed_max_model_id
-    else:  ## range(model_id+1, max_model_id+1)
-        # 最新数据学习过，但没学完，此时优先学习有效窗口内的最旧数据
-        if queue_dir_max_model_id == processed_max_model_id:
-            valid_min_id, valid_min_file_path = get_min_model_id(sorted_name_list, min_id, rank)
-            if valid_min_id == processed_max_model_id:
-                return None, len(sorted_name_list), processed_max_model_id
-            # 有效窗口内的（有效）最旧数据
-            start_of_ais = valid_min_id
-        else:
-            start_of_ais=queue_dir_max_model_id
-
-        id2namelist = {id: [] for id in range(start_of_ais + 1, processed_max_model_id + 1)}
-        for pt_name in sorted_name_list:
-            id =  get_model_id_from_name(pt_name.name)
-            if id > start_of_ais and id <= processed_max_model_id:
-                id2namelist[id].append(pt_name)
-        history_advs = []
-        aix_track = []
-        for id in range(start_of_ais + 1, processed_max_model_id + 1):
-            if len(id2namelist[id]) == 0:
-                continue
-            filename_idx = random.choice(range(len(id2namelist[id]) // world_size))
-            wait_for_everyone()
-            filename_idx = broadcast(torch.tensor(filename_idx,dtype=torch.int32,device=f"cuda:{rank}"), from_process=0).item()
-            filename = id2namelist[id][filename_idx * world_size: (1+filename_idx) * world_size][rank]
-            # print(f"【找到退火数据】 rank-{rank}: data_model_id:{data_model_id}  processed_max_model_id:{processed_max_model_id}   self_filename:{filename}")
-            data = torch.load(filename, weights_only=False)
-            history_advs.append(data['advantages'].unsqueeze(1))
-            aix_track.append(f"{id}")
-
-        history_advs = torch.cat(history_advs, dim=1)
-
-        if rank == 0:
-            print(f"【找到退火数据】 {'->'.join(aix_track)}")
-        return history_advs, len(sorted_name_list), processed_max_model_id
+            return valid_id, file
 
 @profiling_decorator
-def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, timeout: int = 600, AIS_len: int = 8, max_diff_step: int = 12) -> Optional[Dict[str, Any]]:
+def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, timeout: int = 600, AIS_len: int = 8, max_diff_step: int = 12, world_size: int=4) -> Optional[Dict[str, Any]]:
     """
     原子地从文件队列中获取一个文件，使用 torch.load 读取，并返回其内容。
     这是一个阻塞式操作，为多进程消费者设计。
@@ -147,15 +97,20 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
     last_train_model_id = self.last_model_id
 
     if rank == 0:
-        print(f"last_train_model_id:{last_train_model_id}, learner_model_id:{learner_model_id} \n")
+        print(f"\nlast_train_model_id:{last_train_model_id}, learner_model_id:{learner_model_id} \n")
 
     while True:
-        sorted_name_list = sorted(list(Path(queue_dir).glob("data_*.pt")))
-        num_files_of_queue = len(sorted_name_list)
-        sorted_name_list = sorted_name_list[-256:]
-        queue_dir_max_model_id, data_to_learn = get_max_model_id(sorted_name_list, rank)
+        sorted_queue_dir = sorted(list(Path(queue_dir).glob("data_*.pt")))
+        num_files_of_queue = len(sorted_queue_dir)
+        if num_files_of_queue % world_size != 0:
+            print(f"文件数{num_files_of_queue}不是{world_size}倍数，跳过")
+            time.sleep(1.0)
+            continue
 
-        if not data_to_learn:
+        sorted_queue_dir = sorted_queue_dir[-256:]
+        queue_dir_max_model_id, path_in_queue_max = get_max_model_id(sorted_queue_dir, rank)
+
+        if not path_in_queue_max:
             time.sleep(1.0)  # 队列为空，短暂等待后重试
             # print(f"短暂等待后重试: queue_dir 为空\n")
             continue
@@ -166,23 +121,70 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
             continue
         # 普通重要性采样
         else:
-            min_id = learner_model_id - max_diff_step
+            sorted_processing_dir = sorted(list(Path(processing_dir).glob("data_*.pt")))
+            num_files_of_processing = len(sorted_processing_dir)
+            sorted_processing_dir = sorted_processing_dir[-256:]
+            processing_max_model_id, _ = get_max_model_id(sorted_processing_dir, rank)
 
-            history_adv,num_files_of_prcessing,processed_max_model_id = find_ais_track(processed_data_path=processing_dir, queue_dir_max_model_id=queue_dir_max_model_id, min_id=min_id, rank=rank)
-            source_path = queue_dir / data_to_learn.name
-            processing_path = processing_dir / data_to_learn.name
-            data = torch.load(source_path, map_location='cpu', weights_only=False)
+            # 情况-1 queue里面出现新的id的数据
+            if processing_max_model_id < queue_dir_max_model_id:
+                path_of_data_to_learn = path_in_queue_max
+                history_advs = None
+            # 情况-2 queue里面没有出现新的id的数据，优先去寻找滑动窗口内的最旧数据（而不是优先去学习最新id下没有学完的数据）
+            else:
+                theory_min_id = max(processing_max_model_id - max_diff_step,0) # 此处不是以global-step计算，而是以 processing_max_model_id
+                # 寻找滑窗内的最旧数据
+                queue_dir_min_model_id, path_in_queue_min = get_min_model_id(sorted_queue_dir, theory_min_id, rank)
+                # 没有最新（指新的id）数据到达时，永远学习滑窗内最旧的数据
+                path_of_data_to_learn = path_in_queue_min
+                # 情况2.1 没有更旧数据
+                if queue_dir_min_model_id == processing_max_model_id:
+                    history_advs= None
+                # 情况2.2 找到更旧数据，可以退火
+                else:
+                    history_advs = []
+                    aix_track = []
+                    id2pathlist = {id: [] for id in range(queue_dir_min_model_id + 1, processing_max_model_id + 1)}
+
+                    for data_path in sorted_processing_dir:
+                        id =  get_model_id_from_name(data_path.name)
+                        # 退🔥滑窗内的数据
+                        if id > queue_dir_min_model_id and id <= processing_max_model_id:
+                            id2pathlist[id].append(data_path)
+                    ####################################################################################################
+                    # sampler_per_token_logps = None
+                    for id in range(queue_dir_min_model_id + 1, processing_max_model_id + 1):
+                        if len(id2pathlist[id]) == 0:
+                            continue
+                        # 可能存在多条退火路径，随机选一条，确保各个进程选择同一个时间戳
+                        ais_data_filepath_idx = random.choice(range(len(id2pathlist[id]) // world_size))
+                        wait_for_everyone()
+                        ais_data_filepath_idx = broadcast(torch.tensor(ais_data_filepath_idx,dtype=torch.int32,device=f"cuda:{rank}"), from_process=0).item()
+                        ais_data_filepath = id2pathlist[id][ais_data_filepath_idx * world_size: (1+ais_data_filepath_idx) * world_size][rank]
+                        # print(f"【找到退火数据】 rank-{rank}: data_model_id:{data_model_id}  processed_max_model_id:{processed_max_model_id}   self_filename:{filename}")
+                        ais_data = torch.load(ais_data_filepath, map_location='cpu', weights_only=False)
+
+                        history_advs.append(ais_data['advantages'].unsqueeze(1))
+                        aix_track.append(f"{id}")
+                        # 记录退火路径上上最后一个样本x0的logp，用于计算重要性采样\frac{f0(x0)}{f1(x0)}
+                        # if id == processing_max_model_id:
+                        #     sampler_per_token_logps = ais_data['sampler_per_token_logps']
+                    # assert sampler_per_token_logps is not None
+                    history_advs = torch.cat(history_advs, dim=1)
+                    if rank == 0:
+                        print(f"「找到退火数据」 {'->'.join(aix_track)} (已学习的最新数据id为：{processing_max_model_id})")
+
+            data_to_learn = torch.load(path_of_data_to_learn, map_location='cpu', weights_only=False)
             wait_for_everyone()
-            # print(f"rank-{rank}: wait_for_everyone 结束\n")
-            os.rename(source_path, processing_path)
-            # print(f"rank-{rank}: 移动数据 {source_path} -> {processing_path}")
-            data['history_advs'] = history_adv if history_adv is not None else torch.zeros([self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps, 1])
-            # print(f"【退火重要性采样数据】:{processing_path}")
-            data['metrics']['train']['num_files_of_queue'] = [num_files_of_queue]
-            data['metrics']['train']['num_files_of_prcessing'] = [num_files_of_prcessing]
-            data['metrics']['train']['queue_dir_max_model_id'] = [queue_dir_max_model_id]
-            data['metrics']['train']['processed_max_model_id'] = [processed_max_model_id]
-            return data
+            os.rename(queue_dir / path_of_data_to_learn.name, processing_dir / path_of_data_to_learn.name)
+            data_to_learn['history_advs'] = history_advs if history_advs is not None else torch.zeros([self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps, 1])
+            # # print(f"【退火重要性采样数据】:{processing_path}")
+            data_to_learn['metrics']['train']['num_files_of_queue'] = [num_files_of_queue]
+            data_to_learn['metrics']['train']['num_files_of_prcessing'] = [num_files_of_processing]
+            data_to_learn['metrics']['train']['queue_dir_max_model_id'] = [queue_dir_max_model_id]
+            data_to_learn['metrics']['train']['processed_max_model_id'] = [processing_max_model_id]
+            return data_to_learn
+
 
 # =================================================================================
 # 2. 模型同步回调 (与之前相同)

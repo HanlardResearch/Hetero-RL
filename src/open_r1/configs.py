@@ -180,6 +180,14 @@ class GRPOScriptArguments(trl.ScriptArguments):
         default=0.1,
         metadata={"help": "用于控制退火权重的敏感度"},
     )
+    cppo_beta: float = field(
+        default=0.0,
+        metadata={"help": "用于持续KL散度计算"},
+    )
+    max_diff_step:int = field(
+        default=12,
+        metadata={"help": "退火路径最大长度"},
+    )
 
 @dataclass
 class MoISScriptArguments(GRPOScriptArguments):

@@ -36,7 +36,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --dataset_name "/extrahome0/HF_datasets/open-r1/simplelr_qwen_level3to5" \
   --max_steps 1295 \
   --save_strategy "steps" --save_steps 3200  --save_total_limit  5 \
-  --eval_strategy 'steps' --eval_steps 32 \
+  --eval_strategy 'steps' --eval_steps 64 \
   --wandb_entity "pcl-zh" --wandb_project "GPG"  --report_to "wandb" \
   --log_completions True --logging_steps 1 \
   --config recipes/AsyncGRPO/config_simple_rl_math_l35_nRMs_${cfg}.yaml \
@@ -47,7 +47,10 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --gradient_accumulation_steps 8 \
   --num_generations 8 \
   --wandb_name $wandb_name \
-  --ais_beta 0.2 \
-  --eval_on_start True > $log_path 2>&1
+  --ais_beta 0.5 \
+  --cppo_beta 0.00 \
+  --max_diff_step 4 \
+  --loss_type "ais_bnpo" \
+  --eval_on_start False > $log_path 2>&1
 
 
