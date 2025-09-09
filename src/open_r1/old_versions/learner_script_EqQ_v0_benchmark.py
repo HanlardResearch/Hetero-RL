@@ -26,6 +26,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.utils import is_peft_available
+import trl
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from trl.trainer.grpo_trainer import RepeatSampler
 from trl.extras.profiling import profiling_context, profiling_decorator
@@ -45,7 +46,7 @@ from trl.trainer.utils import (
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
-
+from functools import reduce
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
@@ -63,7 +64,7 @@ import torch
 import transformers
 from datasets import load_dataset
 from transformers import set_seed
-from transformers.trainer_utils import get_last_checkpoint
+from transformers.trainer_utils import get_last_checkpoint, speed_metrics
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from open_r1.configs import GRPOConfig, GRPOScriptArguments, GPGConfig
 from open_r1.rewards import get_reward_funcs
@@ -74,11 +75,10 @@ from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 from open_r1.utils.data_utils import custom_loading_dataset
 from transformers import TrainerCallback
 from pathlib import Path
-from async_utils import setup_fs_queue, pop_from_fs_queue,SamplerSyncCallback # 新增
+
 from trl.extras.profiling import profiling_decorator, profiling_context
 from transformers.utils import is_rich_available
-from typing import Any, Callable, Optional, Union
-from typing import Dict, Any, Union
+from typing import Any, Callable, Optional, Union, Dict
 import torch.nn.functional as F
 
 import time
@@ -99,6 +99,8 @@ from packaging import version
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
 from torch.utils.data import DataLoader, Dataset, IterableDataset, RandomSampler, SequentialSampler
 
+#################################################################################################################
+from async_utils0809 import setup_fs_queue, pop_from_fs_queue,SamplerSyncCallback # 新增
 #################################################################################################################
 
 import os
@@ -177,12 +179,24 @@ if is_accelerate_available():
 
     if is_deepspeed_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
+import math
+from transformers.debug_utils import DebugOption
+from transformers.utils import is_torch_xla_available
+if is_torch_xla_available():
+    import torch_xla.core.xla_model as xm
+
 #################################################################################################################
 
+#################################################################################################################
 
+readme="""
+EqQ_v0版本: 基于6b版本，计算$E_q q$, 记录了方差
+
+"""
+############################################
 
 logger = logging.getLogger(__name__)
-
+logger.info(readme)
 
 # torch.nanstd doesn't exist, so we define it here
 def nanstd(tensor: torch.Tensor) -> torch.Tensor:
@@ -331,7 +345,18 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
-    
+
+def get_ESS(weight_tensor):
+    """
+    :param weight_tensor: p/q
+    :return:
+    """
+    f = weight_tensor.detach().sum().square()
+    g =  weight_tensor.detach().square().sum()
+    return (f/g).item()
+
+
+
 class Learner_MoISTrainer(Trainer):
     """
     refer to GRPOTrainer
@@ -344,6 +369,7 @@ class Learner_MoISTrainer(Trainer):
         ais_beta: float,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
+        script_args: Optional[trl.ScriptArguments] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -407,6 +433,7 @@ class Learner_MoISTrainer(Trainer):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
         self.ais_beta = ais_beta
+        self.script_args  =  script_args
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
@@ -467,6 +494,7 @@ class Learner_MoISTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.metric_key_prefix = ""
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -697,6 +725,151 @@ class Learner_MoISTrainer(Trainer):
             f"Reading from queue: {self.queue_dir}, "
             f"Using processing dir: {self.processing_dir}"
         )
+
+    def _compute_loss(self, model, inputs):
+        # Compute the per-token log probabilities for the model
+        # print(inputs)
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+
+        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+
+
+        # Log the metrics
+        mode = "train" if self.model.training else "eval"
+        advantages = inputs["advantages"]
+        old_per_token_logps = inputs["sampler_per_token_logps"]
+
+        if mode == "train":
+            assert old_per_token_logps is not None
+        else:
+            old_per_token_logps = per_token_logps.detach()
+
+        ################## CPPO-KL 正则化损失 ##################
+        cppo_per_token_kl = torch.exp(old_per_token_logps - per_token_logps) - (old_per_token_logps - per_token_logps) - 1
+        cppo_per_seq_kl = (cppo_per_token_kl * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+        loss_cppo_kl = cppo_per_seq_kl.mean()
+
+        ################## 样本-level 的P和Q ##################
+        sampler_seq_lopp =  (old_per_token_logps * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)
+        learner_seq_lopp = (per_token_logps * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)
+        avg_sampler_seq_p = sampler_seq_lopp.exp().mean().detach()
+        std_sampler_seq_p = sampler_seq_lopp.exp().std().detach()
+        adv_std = advantages.std()
+        learner_seq_p = learner_seq_lopp.exp()
+        sampler_seq_p = sampler_seq_lopp.exp()
+        normlized_q = sampler_seq_p.detach() / (sampler_seq_p.sum().detach())
+        E_qP =  (normlized_q * learner_seq_p).sum()
+        E_qQ =  (normlized_q * sampler_seq_p).sum()
+
+        # Compute the loss
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo"]: # Token Level
+            coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            # Two-sided clipping
+            if self.args.delta is not None:
+                coef_1 = torch.clamp(coef_1, max=self.args.delta)
+
+            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+
+            # if self.beta != 0.0:
+            #     per_token_loss = per_token_loss + self.beta * per_token_kl
+
+            if self.loss_type == "grpo":
+                loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            elif self.loss_type == "bnpo":
+                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            elif self.loss_type == "dr_grpo":
+                loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)         
+        elif self.loss_type in ["EqP", "EqQ", "gspo"]: # Sequence/Group Level
+            if self.loss_type == "EqP":
+                coef_1 = learner_seq_p / E_qP
+            elif self.loss_type == "EqQ":
+                coef_1 = learner_seq_p / E_qQ
+            elif self.loss_type == "gspo":
+                coef_1 = learner_seq_p / sampler_seq_p
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            per_seq_loss1 = coef_1 * advantages
+            per_seq_loss2 = coef_2 * advantages
+            per_seq_loss = -torch.min(per_seq_loss1, per_seq_loss2)
+            loss = per_seq_loss.mean()
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+
+        ############################ 各个 ratio  ###############################
+        ratio_grpo = torch.exp(per_token_logps.detach() - old_per_token_logps)
+        ratio_gspo = learner_seq_p.detach()/sampler_seq_p.detach()
+        ratio_pEqQ = learner_seq_p.detach()/E_qQ.detach()
+        ratio_pEqP = learner_seq_p.detach()/E_qP.detach()
+
+        ############################ 各个 ratio 的方差 #########################
+        var_ratio_grpo = ((ratio_grpo * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
+        var_ratio_gspo = (ratio_gspo.square() * normlized_q).sum() - (ratio_gspo * normlized_q).sum().square()
+        var_P_EqQ =  (ratio_pEqQ.square() * normlized_q).sum() - (ratio_pEqQ * normlized_q).sum().square()
+        var_P_EqP =  (ratio_pEqP.square() * normlized_q).sum() - (ratio_pEqP * normlized_q).sum().square()
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo"]:
+            var_coef1 = ((coef_1 * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
+            var_coef2 = ((coef_2 * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
+        else:
+            var_coef1 = (coef_1.detach().square() * normlized_q).sum() - (coef_1.detach() * normlized_q).sum().square()
+            var_coef2 = (coef_2.detach().square() * normlized_q).sum() - (coef_2.detach() * normlized_q).sum().square()
+
+        ########################## WANDB 显示的统计量 #######################
+        self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
+        self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
+        self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
+        self._metrics[mode]["var_ratio_grpo"].append(var_ratio_grpo.item())
+        self._metrics[mode]["var_ratio_pq"].append(var_ratio_gspo.item())
+        self._metrics[mode]["var_P_EqQ"].append(var_P_EqQ.item())
+        self._metrics[mode]["var_P_EqP"].append(var_P_EqP.item())
+
+        self._metrics[mode]["sts_var/ratio_grpo"].append(ratio_grpo.var().item())
+        self._metrics[mode]["sts_var/ratio_pq"].append(ratio_gspo.var().item())
+        self._metrics[mode]["sts_var/ratio_pEqQ"].append(ratio_pEqQ.var().item())
+        self._metrics[mode]["sts_var/ratio_pEqP"].append(ratio_pEqP.var().item())
+
+        self._metrics[mode]["var_coef1"].append(var_coef1.item())
+        self._metrics[mode]["var_coef2"].append(var_coef2.item())
+        self._metrics[mode]["ratio_grpo"].append(ratio_grpo.nanmean().item())
+        self._metrics[mode]["ratio_pq"].append(ratio_gspo.nanmean().item())
+        self._metrics[mode]["ratio_pEqQ"].append(ratio_pEqQ.nanmean().item())
+        self._metrics[mode]["ratio_pEqP"].append(ratio_pEqP.nanmean().item())
+        self._metrics[mode]["adv_std"].append(adv_std.item())
+        self._metrics[mode]["avg_sampler_seq_p"].append(avg_sampler_seq_p.item())
+        self._metrics[mode]["std_sampler_seq_p"].append(std_sampler_seq_p.item())
+        self._metrics[mode]["cppo_kl"].append(loss_cppo_kl.item())
+
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo"]:
+            is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
+            is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            is_region_clipped = is_low_clipped | is_high_clipped
+
+            low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
+            high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
+            clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
+
+            gathered_low_clip = self.accelerator.gather(low_clip)
+            self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
+            self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+            gathered_high_clip = self.accelerator.gather(high_clip)
+            self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
+            self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
+            gathered_clip_ratio = self.accelerator.gather(clip_ratio)
+            self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
+
+        ########################## CPPO KL 正则 ############################
+        if self.script_args.cppo_beta > 0:
+            # self._metrics[mode]["cppo_kl"].append(loss_cppo_kl.item())
+            loss = loss + self.script_args.cppo_beta * loss_cppo_kl
+
+        return loss
+
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1247,158 +1420,6 @@ class Learner_MoISTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
-    def _compute_loss(self, model, inputs):
-        # Compute the per-token log probabilities for the model
-
-        # print(inputs)
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
-        # Log the metrics
-        mode = "train" if self.model.training else "eval"
-
-        if self.loss_type in ["grpo", "bnpo","dr_grpo"]:
-
-            # Compute the loss
-            advantages = inputs["advantages"]
-            # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
-            # old_per_token_logps == per_token_logps, so we can skip it's computation
-            # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
-            old_per_token_logps = (
-                per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
-            )
-            coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-
-            self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
-            self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
-            self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
-
-            # Two-sided clipping
-            if self.args.delta is not None:
-                coef_1 = torch.clamp(coef_1, max=self.args.delta)
-
-            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-            if self.beta != 0.0:
-                per_token_loss = per_token_loss + self.beta * per_token_kl
-            if self.loss_type == "grpo":
-                loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-            elif self.loss_type == "bnpo":
-                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            elif self.loss_type == "dr_grpo":
-                loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            # Compute the loss
-            advantages = inputs["advantages"]
-            if self.loss_type == "mois":
-                per_token_loss,coef_1,coef_2 = self.get_loss_MoIS(model_ids=inputs['model_ids'],
-                                          advantages=advantages,
-                                          learner_per_token_logps=per_token_logps,
-                                          sampler_per_token_logps=inputs["sampler_per_token_logps"].detach(),
-                                          )
-                loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-            elif self.loss_type == "pg":
-                per_token_loss = -per_token_logps * advantages.unsqueeze(1)
-                loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-                return loss
-            elif self.loss_type == "is_bnpo":
-                assert inputs["sampler_per_token_logps"] is not None
-                old_per_token_logps = inputs["sampler_per_token_logps"]
-                coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-
-                self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
-                self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
-                self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
-
-                coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-                # Two-sided clipping
-                if self.args.delta is not None:
-                    coef_1 = torch.clamp(coef_1, max=self.args.delta)
-                per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-                per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-                per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            elif self.loss_type == "ais_bnpo":
-                # assert inputs["sampler_per_token_logps"] is not None
-                old_per_token_logps = per_token_logps.detach()
-                coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-                self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
-                self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
-                self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
-                # coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-                # Two-sided clipping
-                # if self.args.delta is not None:
-                #     coef_1 = torch.clamp(coef_1, max=self.args.delta)
-
-                # [num_generations, AIS_len-1]张量
-                history_adv = inputs['history_advs']
-                AIS_track_len = history_adv.shape[1] if not torch.all(history_adv == 0) else 0
-
-
-                #[num_generations,1]
-                AIS_weight = (self.ais_beta * history_adv.sum(dim=1).unsqueeze(dim=1)).exp()
-
-                coef_3 = AIS_weight * coef_1
-                coef_4 = torch.clamp(coef_3, 1 - self.epsilon_low, 1 + self.epsilon_high)
-
-                self._metrics[mode]["AIS_weight/mean"].append(AIS_weight.nanmean().item())
-                self._metrics[mode]["AIS_weight/max"].append(nanmax(AIS_weight).item())
-                self._metrics[mode]["AIS_weight/min"].append(nanmin(AIS_weight).item())
-
-                self._metrics[mode]["ais_ratio/mean"].append(coef_4.nanmean().item())
-                self._metrics[mode]["ais_ratio/max"].append(nanmax(coef_4).item())
-                self._metrics[mode]["ais_ratio/min"].append(nanmin(coef_4).item())
-
-                self._metrics[mode]["AIS_track_len"]= [AIS_track_len]
-
-
-                per_token_loss3 = coef_3 * advantages.unsqueeze(1)
-                per_token_loss4 = coef_4 * advantages.unsqueeze(1)
-
-
-                per_token_loss = -torch.min(per_token_loss4,per_token_loss3)
-                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-
-            else:
-                raise ValueError(f"Unknown loss type: {self.loss_type}")
-
-
-
-        if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
-
-        # Compute the clipped probability ratios
-        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
-        is_region_clipped = is_low_clipped | is_high_clipped
-
-        low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
-        high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
-        clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
-
-        gathered_low_clip = self.accelerator.gather(low_clip)
-        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
-        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(high_clip)
-        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
-        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
-        return loss
 
     @profiling_decorator
     def training_step(
@@ -1532,6 +1553,113 @@ class Learner_MoISTrainer(Trainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
+    def evaluate(
+        self,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        ignore_keys: Optional[list[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        """
+        Run evaluation and returns metrics.
+
+        The calling script will be responsible for providing a method to compute metrics, as they are task-dependent
+        (pass it to the init `compute_metrics` argument).
+
+        You can also subclass and override this method to inject custom behavior.
+
+        Args:
+            eval_dataset (Union[`Dataset`, Dict[str, `Dataset`]), *optional*):
+                Pass a dataset if you wish to override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns
+                not accepted by the `model.forward()` method are automatically removed. If it is a dictionary, it will
+                evaluate on each dataset, prepending the dictionary key to the metric name. Datasets must implement the
+                `__len__` method.
+
+                <Tip>
+
+                If you pass a dictionary with names of datasets as keys and datasets as values, evaluate will run
+                separate evaluations on each dataset. This can be useful to monitor how training affects other
+                datasets or simply to get a more fine-grained evaluation.
+                When used with `load_best_model_at_end`, make sure `metric_for_best_model` references exactly one
+                of the datasets. If you, for example, pass in `{"data1": data1, "data2": data2}` for two datasets
+                `data1` and `data2`, you could specify `metric_for_best_model="eval_data1_loss"` for using the
+                loss on `data1` and `metric_for_best_model="eval_data2_loss"` for the loss on `data2`.
+
+                </Tip>
+
+            ignore_keys (`List[str]`, *optional*):
+                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
+                gathering predictions.
+            metric_key_prefix (`str`, *optional*, defaults to `"eval"`):
+                An optional prefix to be used as the metrics key prefix. For example the metrics "bleu" will be named
+                "eval_bleu" if the prefix is "eval" (default)
+
+        Returns:
+            A dictionary containing the evaluation loss and the potential metrics computed from the predictions. The
+            dictionary also contains the epoch number which comes from the training state.
+        """
+        # handle multiple eval datasets
+        override = eval_dataset is not None
+        eval_dataset = eval_dataset if override else self.eval_dataset
+        if isinstance(eval_dataset, dict):
+            metrics = {}
+            for eval_dataset_name, _eval_dataset in eval_dataset.items():
+                # print(f"[debug] line329",eval_dataset.items())
+                # print(f"[debug] line330 {eval_dataset_name}")
+                # print(f"[debug] line331",_eval_dataset)
+
+                dataset_metrics = self.evaluate(
+                    eval_dataset=_eval_dataset if override else eval_dataset_name,
+                    ignore_keys=ignore_keys,
+                    metric_key_prefix=f"{metric_key_prefix}_{eval_dataset_name}",
+                )
+                metrics.update(dataset_metrics)
+            return metrics
+
+        # memory metrics - must set up as early as possible
+        self._memory_tracker.start()
+        self.metric_key_prefix = metric_key_prefix
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+        if self.is_fsdp_xla_v2_enabled:
+            eval_dataloader = tpu_spmd_dataloader(eval_dataloader)
+
+        start_time = time.time()
+
+        eval_loop = self.prediction_loop if self.args.use_legacy_prediction_loop else self.evaluation_loop
+        output = eval_loop(
+            eval_dataloader,
+            description="Evaluation",
+            # No point gathering the predictions if there are no metrics, otherwise we defer to
+            # self.args.prediction_loss_only
+            prediction_loss_only=True if self.compute_metrics is None else None,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+
+        total_batch_size = self.args.eval_batch_size * self.args.world_size
+        if f"{metric_key_prefix}_jit_compilation_time" in output.metrics:
+            start_time += output.metrics[f"{metric_key_prefix}_jit_compilation_time"]
+        if f"{metric_key_prefix}_model_preparation_time" in output.metrics:
+            start_time += output.metrics[f"{metric_key_prefix}_model_preparation_time"]
+        output.metrics.update(
+            speed_metrics(
+                metric_key_prefix,
+                start_time,
+                num_samples=output.num_samples,
+                num_steps=math.ceil(output.num_samples / total_batch_size),
+            )
+        )
+        
+        self.log(output.metrics)
+        if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
+            # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
+            xm.master_print(met.metrics_report())
+
+        self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, output.metrics)
+
+        self._memory_tracker.stop_and_update_metrics(output.metrics)
+        
+        return output.metrics
+
     @profiling_decorator
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1544,7 +1672,8 @@ class Learner_MoISTrainer(Trainer):
                 queue_dir=self.queue_dir,
                 processing_dir=self.processing_dir,
                 rank=self.rank,
-                timeout=self.queue_timeout
+                timeout=self.queue_timeout,
+                max_diff_step=self.script_args.max_diff_step
             )
 
             # 处理超时或队列为空的情况
@@ -1620,9 +1749,6 @@ class Learner_MoISTrainer(Trainer):
                 "guided_decoding": guided_decoding,
             }
 
-            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
-                generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
-
             if self.args.generation_kwargs is not None:
                 generation_kwargs.update(self.args.generation_kwargs)
             sampling_params = SamplingParams(**generation_kwargs)
@@ -1642,18 +1768,8 @@ class Learner_MoISTrainer(Trainer):
 
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             ################# 记录采样器的生成概率 #####################
-            # if "is" in self.loss_type:# is 代表重要性采样
-            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
-                tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
-                # 一行搞定提取 + 转 tensor
-                logprob_tensors = [
-                    torch.tensor([next(iter(item.values())).logprob for item in a[0]],
-                                 device=self.model.device, dtype=self.model.dtype)
-                    for a in tmp
-                ]
-                sampler_per_token_logps = pad_sequence(logprob_tensors, batch_first=True, padding_value=float('-inf'))
-            else:
-                sampler_per_token_logps = None
+            
+            sampler_per_token_logps = None
             ################# 记录采样器的生成概率 #####################
 
 
@@ -1803,9 +1919,13 @@ class Learner_MoISTrainer(Trainer):
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
+            if mode == "eval":
+                rewards_str = self.metric_key_prefix + "_rewards" if self.metric_key_prefix != "eval" else "rewards"
+            else:
+                rewards_str = "rewards"
+            self._metrics[mode][f"{rewards_str}/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
+            self._metrics[mode][f"{rewards_str}/{reward_func_name}/std"].append(std_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
@@ -1928,7 +2048,8 @@ def main(script_args, training_args, model_args):
         prompt = []
         if training_args.system_prompt is not None:
             prompt.append({"role": "system", "content": training_args.system_prompt})
-        prompt.append({"role": "user", "content": example["problem"]})
+        # prompt.append({"role": "user", "content": example["problem"]})
+        prompt.append({"role": "user", "content": example["problem"] + "/no_think"})
         return {"prompt": prompt}
 
     dataset = dataset.map(make_conversation)
@@ -1936,7 +2057,7 @@ def main(script_args, training_args, model_args):
     for split in dataset:
         if "messages" in dataset[split].column_names:
             dataset[split] = dataset[split].remove_columns("messages")
-
+    
     logger.info("*** Initializing model kwargs ***")
     torch_dtype = (
         model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
@@ -1960,12 +2081,29 @@ def main(script_args, training_args, model_args):
             eval_dataset = dataset[script_args.dataset_train_split]
         else:
             eval_dataset = dataset[script_args.dataset_test_split]
+        if script_args.use_benchmark:
+            amc23_data = load_dataset("/extrahome0/HF_datasets/amc23")
+            amc23_data = amc23_data.rename_column("question", "problem")[script_args.dataset_test_split].map(make_conversation)
+            # amc23_data = amc23_data.rename_column("answer", "solution")[script_args.dataset_test_split].map(make_conversation)
+            aime_2024_data = load_dataset("/extrahome0/HF_datasets/aime_2024")[script_args.dataset_train_split].map(make_conversation)
+            aime_2025_data = load_dataset("/extrahome0/HF_datasets/aime_2025")[script_args.dataset_train_split].map(make_conversation)
+            math_500_data = load_dataset("/extrahome0/HF_datasets/MATH-500")[script_args.dataset_test_split].map(make_conversation)
+
+            eval_data = {
+                "validaion": eval_dataset,
+                "amc23": amc23_data,
+                "aime_2024": aime_2024_data,
+                "aime_2025": aime_2025_data,
+                "math_500": math_500_data
+            }
+            eval_dataset = eval_data
 
     trainer = Learner_MoISTrainer(
         model=model_args.model_name_or_path,
         ais_beta=script_args.ais_beta,
         reward_funcs=reward_funcs,
         args=training_args,
+        script_args = script_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=eval_dataset,
         # eval_dataset=eval_dataset.select(range(64)),

@@ -341,6 +341,7 @@ class Learner_MoISTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
+        ais_beta: float,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -394,7 +395,7 @@ class Learner_MoISTrainer(Trainer):
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
             model = self._enable_gradient_checkpointing(model, args)
-
+            
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
@@ -405,6 +406,7 @@ class Learner_MoISTrainer(Trainer):
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
+        self.ais_beta = ais_beta
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
@@ -550,6 +552,7 @@ class Learner_MoISTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self.last_model_id = -1
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
@@ -568,7 +571,7 @@ class Learner_MoISTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
-
+        
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -1247,6 +1250,7 @@ class Learner_MoISTrainer(Trainer):
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
 
+        # print(inputs)
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
@@ -1261,6 +1265,8 @@ class Learner_MoISTrainer(Trainer):
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
+        # Log the metrics
+        mode = "train" if self.model.training else "eval"
 
         if self.loss_type in ["grpo", "bnpo","dr_grpo"]:
 
@@ -1274,6 +1280,10 @@ class Learner_MoISTrainer(Trainer):
             )
             coef_1 = torch.exp(per_token_logps - old_per_token_logps)
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+
+            self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
+            self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
+            self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
 
             # Two-sided clipping
             if self.args.delta is not None:
@@ -1301,15 +1311,71 @@ class Learner_MoISTrainer(Trainer):
                                           )
                 loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
             elif self.loss_type == "pg":
-                per_token_loss = self.get_PG_loss(advantages=advantages,
-                                        learner_per_token_logps=per_token_logps,
-                                        )
+                per_token_loss = -per_token_logps * advantages.unsqueeze(1)
                 loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+                return loss
+            elif self.loss_type == "is_bnpo":
+                assert inputs["sampler_per_token_logps"] is not None
+                old_per_token_logps = inputs["sampler_per_token_logps"]
+                coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+
+                self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
+                self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
+                self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
+
+                coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+                # Two-sided clipping
+                if self.args.delta is not None:
+                    coef_1 = torch.clamp(coef_1, max=self.args.delta)
+                per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+                per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+                per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            elif self.loss_type == "ais_bnpo":
+                # assert inputs["sampler_per_token_logps"] is not None
+                old_per_token_logps = per_token_logps.detach()
+                coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+                self._metrics[mode]["ratio/mean"].append(coef_1.nanmean().item())
+                self._metrics[mode]["ratio/max"].append(nanmax(coef_1).item())
+                self._metrics[mode]["ratio/min"].append(nanmin(coef_1).item())
+                # coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+                # Two-sided clipping
+                # if self.args.delta is not None:
+                #     coef_1 = torch.clamp(coef_1, max=self.args.delta)
+
+                # [num_generations, AIS_len-1]张量
+                history_adv = inputs['history_advs']
+                AIS_track_len = history_adv.shape[1] if not torch.all(history_adv == 0) else 0
+
+
+                #[num_generations,1]
+                AIS_weight = (self.ais_beta * history_adv.sum(dim=1).unsqueeze(dim=1)).exp()
+
+                coef_3 = AIS_weight * coef_1
+                coef_4 = torch.clamp(coef_3, 1 - self.epsilon_low, 1 + self.epsilon_high)
+
+                self._metrics[mode]["AIS_weight/mean"].append(AIS_weight.nanmean().item())
+                self._metrics[mode]["AIS_weight/max"].append(nanmax(AIS_weight).item())
+                self._metrics[mode]["AIS_weight/min"].append(nanmin(AIS_weight).item())
+
+                self._metrics[mode]["ais_ratio/mean"].append(coef_4.nanmean().item())
+                self._metrics[mode]["ais_ratio/max"].append(nanmax(coef_4).item())
+                self._metrics[mode]["ais_ratio/min"].append(nanmin(coef_4).item())
+
+                self._metrics[mode]["AIS_track_len"]= [AIS_track_len]
+
+
+                per_token_loss3 = coef_3 * advantages.unsqueeze(1)
+                per_token_loss4 = coef_4 * advantages.unsqueeze(1)
+
+
+                per_token_loss = -torch.min(per_token_loss4,per_token_loss3)
+                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+
             else:
                 raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-        # Log the metrics
-        mode = "train" if self.model.training else "eval"
+
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
@@ -1450,7 +1516,6 @@ class Learner_MoISTrainer(Trainer):
         #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
         #   - Completions are generated for each batch without buffering or reuse
         # Returns a single local batch in both cases.
-
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
@@ -1507,7 +1572,9 @@ class Learner_MoISTrainer(Trainer):
                 raise e
 
             self._metrics = rollout_batch["metrics"]
-
+            self.last_model_id = rollout_batch["model_ids"]
+            self._metrics[mode]['step_diff'] = [self.state.global_step - rollout_batch['model_ids']]
+            # print("learner_script_MoIS_v4.py line 1571", self._metrics)
             return rollout_batch
         # print(f"line 603 ")
         prompts = [x["prompt"] for x in inputs]
@@ -1553,7 +1620,7 @@ class Learner_MoISTrainer(Trainer):
                 "guided_decoding": guided_decoding,
             }
 
-            if self.loss_type == "mois":
+            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
                 generation_kwargs[ "logprobs"]= 1 # 👈 加这一行
 
             if self.args.generation_kwargs is not None:
@@ -1575,7 +1642,8 @@ class Learner_MoISTrainer(Trainer):
 
             completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             ################# 记录采样器的生成概率 #####################
-            if self.loss_type == "mois":
+            # if "is" in self.loss_type:# is 代表重要性采样
+            if  self.loss_type in ["is_bnpo", "mois"]:# is 代表重要性采样
                 tmp = [[step.logprobs for step in output.outputs] for output in all_outputs]
                 # 一行搞定提取 + 转 tensor
                 logprob_tensors = [
@@ -1587,6 +1655,8 @@ class Learner_MoISTrainer(Trainer):
             else:
                 sampler_per_token_logps = None
             ################# 记录采样器的生成概率 #####################
+
+
             if self.vllm_tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
                 # Each rank generates all outputs — we keep only our share.
@@ -1772,6 +1842,8 @@ class Learner_MoISTrainer(Trainer):
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
         ####################################### 0728 ###############################################
+        damp_history_advs = torch.zeros([self.args.per_device_eval_batch_size, 1],
+                                        dtype=self.model.dtype, device=self.model.device)
 
         return {
             "prompt_ids": prompt_ids,
@@ -1783,6 +1855,7 @@ class Learner_MoISTrainer(Trainer):
             "ref_per_token_logps": ref_per_token_logps,
             "model_ids": self.state.global_step, # 为了根据延迟计算lambdaT
             "sampler_per_token_logps": sampler_per_token_logps, # 训练时这个是采样器的logp，评估时为了不报错，这个是学习器的logp
+            "history_advs": damp_history_advs,
         }
 
 def main(script_args, training_args, model_args):
@@ -1822,6 +1895,15 @@ def main(script_args, training_args, model_args):
 
     if "wandb" in training_args.report_to:
         init_wandb_training(training_args)
+        if training_args.local_rank==0:
+            current_file_path = __file__
+            current_file_name = os.path.basename(current_file_path)
+            wandb.login()
+            wandb.init(project=os.environ["WANDB_PROJECT"],
+                       entity = os.environ["WANDB_ENTITY"],
+                       # config=dict(training_args),
+                       name=script_args.wandb_name if script_args.wandb_name is not None else current_file_name,
+                       )
 
 
     ################
@@ -1881,10 +1963,12 @@ def main(script_args, training_args, model_args):
 
     trainer = Learner_MoISTrainer(
         model=model_args.model_name_or_path,
+        ais_beta=script_args.ais_beta,
         reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=eval_dataset, #eval_dataset=eval_dataset.select(range(64)),
+        eval_dataset=eval_dataset,
+        # eval_dataset=eval_dataset.select(range(64)),
         peft_config=get_peft_config(model_args),
         callbacks=get_callbacks(training_args, model_args),
         processing_class=tokenizer,

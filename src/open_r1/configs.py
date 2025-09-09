@@ -188,7 +188,20 @@ class GRPOScriptArguments(trl.ScriptArguments):
         default=12,
         metadata={"help": "退火路径最大长度"},
     )
-
+    use_benchmark: bool = field(
+        default=False, 
+        metadata={"help": "Whether enable the benchmark for evaluation."},
+    )
+    use_think: bool = field(
+        default=False,
+        metadata={"help": "Whether enable the think mode."},
+    )
+    system_prompt_think: str = field(
+        default="You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. The reasoning process MUST BE enclosed within <think> and </think> tags.",
+    )
+    system_prompt_nothink: str = field(
+        default="You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. Please put your final answer within \\boxed{}. Also, indicate that it is the answer.",
+    )
 @dataclass
 class MoISScriptArguments(GRPOScriptArguments):
     """

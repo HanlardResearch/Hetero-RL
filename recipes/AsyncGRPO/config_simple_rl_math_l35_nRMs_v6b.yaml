@@ -10,7 +10,8 @@ attn_implementation: flash_attention_2
 dataset_name: "datas/SimpleRL-Zoo-Data/simplelr_qwen_level3to5"
 dataset_config: "train.parquet"
 # system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. The reasoning process MUST BE enclosed within <think> and </think> tags."
-system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. Please put your final answer within \\boxed{}. Also, indicate that it is the answer."
+#system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. Please put your final answer within \\boxed{}. Also, indicate that it is the answer."
+system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. Please put your final answer within \\boxed{}. Also, indicate that it is the answer."
 # GRPO trainer config
 beta: 0.0
 bf16: true

@@ -78,7 +78,71 @@ def accuracy_reward(completions, solution, **kwargs):
 
     return rewards
 
-def accuracy_reward_lv35(completions, solution, **kwargs):
+# def accuracy_reward_lv35(completions, solution, **kwargs):
+#     """Reward function that checks if the completion is the same as the ground truth."""
+#     # if isinstance(completions[0],(dict)):
+#     #     contents = [completion["content"] for completion in completions]
+#     # else:
+#     #     contents = [completion for completion in completions]
+#     contents = pre_process(completions)
+#     rewards = []
+#     for content, sol in zip(contents, solution):
+#         box_sol = "$\\\\boxed{}$".format(sol)
+#         try:
+#             gold_parsed = parse(
+#                 box_sol,
+#                 extraction_mode="first_match",
+#             )
+#         except TimeoutError:
+#             rank = dist.get_rank() if dist.is_initialized() else 0
+#             print(f"[Rank  {rank}] gold parse timeout | content='{content}' | sol='{sol}' | box_sol='{box_sol}'")
+#             rewards.append(1.0)
+#             continue
+#         if len(gold_parsed) != 0:
+#             # We require the answer to be provided in correct latex (no malformed operators)
+#             try:
+#                 answer_parsed = parse(
+#                     content,
+#                     extraction_config=[
+#                         LatexExtractionConfig(
+#                             normalization_config=NormalizationConfig(
+#                                 nits=False,
+#                                 malformed_operators=False,
+#                                 basic_latex=True,
+#                                 equations=True,
+#                                 boxed="all",
+#                                 units=True,
+#                             ),
+#                             # Ensures that boxed is tried first
+#                             boxed_match_priority=0,
+#                             try_extract_without_anchor=False,
+#                         )
+#                     ],
+#                     extraction_mode="first_match",
+#                 )
+#                 # print(f'answer_parsed:{answer_parsed}')
+#                 # if len(anxswer_parsed) == 0:
+#                 #     print(f"answer_parsed is None | content='{content}' | sol='{sol}'")
+#             except TimeoutError:
+#                 rank = dist.get_rank() if dist.is_initialized() else 0
+#                 print(f"[Rank {rank}] answer parse timeout | content='{content}' | sol='{sol}'")
+#                 rewards.append(0.0)
+#                 continue
+#             # Reward 1 if the content is the same as the ground truth, 0 otherwise
+#             try:
+#                 reward = float(verify(answer_parsed, gold_parsed))
+#             except Exception as e:
+#                 print(f"verify failed: {e}, answer: {answer_parsed}, gold: {gold_parsed}")
+#                 reward = 0.0
+#         else:
+#             # If the gold solution is not parseable, we reward 1 to skip this example
+#             reward = 1.0
+#             print("accuracy_reward_lv35: Failed to parse gold solution: ", box_sol)
+#         rewards.append(reward)
+
+#     return rewards
+
+def accuracy_reward_lv35(completions, answer, **kwargs):
     """Reward function that checks if the completion is the same as the ground truth."""
     # if isinstance(completions[0],(dict)):
     #     contents = [completion["content"] for completion in completions]
@@ -86,7 +150,7 @@ def accuracy_reward_lv35(completions, solution, **kwargs):
     #     contents = [completion for completion in completions]
     contents = pre_process(completions)
     rewards = []
-    for content, sol in zip(contents, solution):
+    for content, sol in zip(contents, answer):
         box_sol = "$\\\\boxed{}$".format(sol)
         try:
             gold_parsed = parse(
@@ -141,7 +205,6 @@ def accuracy_reward_lv35(completions, solution, **kwargs):
         rewards.append(reward)
 
     return rewards
-
 
 def extra_box_len_reward_v1(completions, threhold=100.0, **kwargs):
     """Reward function that checks if the completion is the same as the ground truth."""
@@ -435,14 +498,14 @@ def reasoning_steps_reward(completions, **kwargs):
     return [min(1.0, count / 3) for count in matches]
 
 
-def len_reward(completions: list[Dict[str, str]], solution: list[str], **kwargs) -> float:
+def len_reward(completions: list[Dict[str, str]], answer: list[str], **kwargs) -> float:
     """Compute length-based rewards to discourage overthinking and promote token efficiency.
 
     Taken from the Kimi 1.5 tech report: https://arxiv.org/abs/2501.12599
 
     Args:
         completions: List of model completions
-        solution: List of ground truth solutions
+        answer: List of ground truth solutions
 
     Returns:
         List of rewards where:
@@ -456,7 +519,7 @@ def len_reward(completions: list[Dict[str, str]], solution: list[str], **kwargs)
     contents = pre_process(completions)
     # First check correctness of answers
     correctness = []
-    for content, sol in zip(contents, solution):
+    for content, sol in zip(contents, answer):
         #############################
         # gold_parsed = parse(
         #     sol,

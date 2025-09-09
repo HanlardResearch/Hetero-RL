@@ -1,29 +1,30 @@
-基于[GPG](https://github.com/AMAP-ML/GPG)/[trl](https://github.com/huggingface/trl)/[openR1](https://github.com/huggingface/open-r1) 改进的异构算法
+An heterogeneous RL algorithm built on [GPG](https://github.com/AMAP-ML/GPG)/[trl](https://github.com/huggingface/trl)/[openR1](https://github.com/huggingface/open-r1).
 
-异步实验脚本
+Asynchronous Reinforcement Learning
 ```shell
-#进入当前目录（目录不同则需要替换脚本的部分路径变量）
+# Enter the current directory (if the directory is different, you need to replace the corresponding path variables in the script).
 cd /userhome/Research_HUB/GPG/open-r1
 
-# 先启动学习器（默认使用 4 * 80GB Nvidia A100）
-bash sh_dir/MoIS_Learner_4gpus_nRMs.sh learner_script_MoIS_v3c MoISv3_7th 1 v0c1 is_bnpo_prompt_clip_enhanced_1L4S &
+# Launch the learner firstly（using 4 * 80GB Nvidia A100 by default）
+CUDA_VISIBLE_DEVICES=2,3,4,5 bash sh_dir/MoIS_Learner_4gpus_nRMs_LogNorm_benchmark.sh learner_script_EqQ_v0_benchmark EqQ_1th 1 v6b EqQ Async_EqQ_diff_32
 
-# 再按启动采样器（每个采样器默认使用 4 * 80GB Nvidia A100）
+# Then launch the sampler（using 4 * 80GB Nvidia A100 for each sampler by default）
 
-## 方式一：批量启动
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S
+## Option 1: launch all samplers at once
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash sh_dir/MoIS_Learner_4gpus_nRMs_LogNorm_benchmark_checkpoint.sh learner_script_checkpoint GEPO_nothink_1th 1 v6b gepo 1L2S_GEPO_diff32_nothink
 
-## 方式二：按顺序依次启动
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 0 &
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 1 &
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 2 &
-bash sh_dir/MoIS_Sampler_4gpus.sh sampler_script_MoIS_v3c MoISv3_7th v0c1 is_bnpo_prompt_clip_enhanced_1L4S 3 &
+## Option 2: launch samplers one by one in sequence
+## (Optional) Resume from checkpoint
+# please put the path of checkpoint into model_name_or_path
+bash sh_dir/MoIS_Sampler_4gpus_single_benchmark_checkpoint.sh sampler_script_checkpoint GEPO_nothink_1th v6b gepo 1L2S_GEPO_diff32_nothink 0 &
+bash sh_dir/MoIS_Sampler_4gpus_single_benchmark_checkpoint.sh sampler_script_checkpoint GEPO_nothink_1th v6b gepo 1L2S_GEPO_diff32_nothink 1 &
 ```
 
-同步实验脚本（默认使用 4 * 80GB Nvidia A100）:
+
+Online-policy（using 4 * 80GB Nvidia A100 by default）:
 ```shell
-#进入当前目录（目录不同则需要替换脚本的部分路径变量）
+# Enter the current directory (if the directory is different, you need to replace the corresponding path variables in the script).
 cd /userhome/Research_HUB/GPG/open-r1
-#后跟算法，目前支持 grpo/bnpo/dr_grpo/EqP/EqQ/gspo
-bash sh_dir/train_grpo_4gpus.sh grpo
+# We support grpo/bnpo/dr_grpo/EqP/EqQ/gspo loss currently.
+CUDA_VISIBLE_DEVICES="0,1,2,3" MASTER_PORT=29510 bash sh_dir/train_grpo_4gpus_benchmark.sh grpo
 ```

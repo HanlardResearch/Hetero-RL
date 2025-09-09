@@ -1,2 +1,4 @@
 wandb
 log_dir
+*.txt
+A100_vs_910A
