@@ -20,7 +20,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   src/open_r1/online_rl.py --config  recipes/Qwen2.5-Math-7B/grpo/config_simple_rl_math_l35_v1_vllm.yaml --output_dir $SAVEPATH \
   --save_total_limit 1 --num_train_epochs 10 --gradient_accumulation_steps 16 --max_completion_length 2048 --max_prompt_length 768 \
   --scale_rewards False --model_name_or_path "/extrahome0/HF_models/Qwen/Qwen3-1.7B" --dataset_name "/extrahome0/HF_datasets/open-r1/simplelr_qwen_level3to5" \
-  --save_strategy "steps" --save_steps 64 \
+  --save_strategy "steps" --save_steps 64 --log_completions False \
   --wandb_entity "pcl-zh"  --wandb_project "GPG"  --report_to "wandb"   \
   --per_device_eval_batch_size 16  --per_device_train_batch_size 8 --eval_strategy "steps" --eval_steps 64 --eval_on_start True --use_benchmark \
   --logging_steps 1  --use_vllm True --loss_type $loss_type > $log_path 2>&1 &

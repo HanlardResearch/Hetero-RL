@@ -1,0 +1,81 @@
+
+# Model arguments
+model_name_or_path: Qwen/Qwen3-1.7B
+model_revision: main
+torch_dtype: bfloat16
+# torch_dtype: float32
+attn_implementation: flash_attention_2
+
+# Data training arguments
+#dataset_name: DigitalLearningGmbH/MATH-lighteval
+dataset_name: "datas/SimpleRL-Zoo-Data/simplelr_qwen_level3to5"
+dataset_config: "train.parquet"
+system_prompt: "You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. The reasoning process MUST BE enclosed within <think> and </think> tags."
+# GRPO trainer config
+beta: 0.0
+bf16: true
+use_vllm: true
+vllm_mode: "colocate"
+# vllm_device: auto
+vllm_gpu_memory_utilization: 0.45
+do_eval: true
+eval_strategy: steps
+eval_steps: 33
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+hub_model_id: Qwen3-1.7B
+hub_strategy: every_save
+learning_rate: 1.0e-06
+log_completions: false
+log_level: info
+logging_first_step: true
+logging_steps: 1
+logging_strategy: steps
+lr_scheduler_type: constant_with_warmup
+max_prompt_length: 1024
+max_completion_length: 3000
+max_steps: -1
+num_generations: 8
+num_train_epochs: 3
+output_dir: "/output_dir"
+overwrite_output_dir: true
+per_device_eval_batch_size: 16
+per_device_train_batch_size: 8
+push_to_hub: false
+report_to:
+- tensorboard
+reward_funcs:
+- accuracy_lv35
+- extra_box_v1
+- extra_box_v2
+- fused_format
+- tag_count
+- length
+- repetition_penalty
+- language_penalty
+reward_weights:
+- 1.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+save_strategy: "steps"
+save_steps: 33
+seed: 42
+warmup_ratio: 0.03
+temperature: 0.6
+top_p : 0.95
+top_k : 20
+delay_sampler: "lognormal"
+lower_bound: 60
+upper_bound: 1920
+confidence: 0.995
+default_delay: 60
+loss_type: "gepo"
+cppo_beta: 0.005
+max_diff_step: 32

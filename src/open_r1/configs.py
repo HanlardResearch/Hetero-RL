@@ -197,7 +197,7 @@ class GRPOScriptArguments(trl.ScriptArguments):
         metadata={"help": "Whether enable the think mode."},
     )
     system_prompt_think: str = field(
-        default="You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. The reasoning process MUST BE enclosed within <think> and </think> tags.",
+        default="You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. You FIRST think about the reasoning process as an internal monologue and then provide the user with the answer. Please put your final answer within \\boxed{}. Also, indicate that it is the answer.",
     )
     system_prompt_nothink: str = field(
         default="You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. Please put your final answer within \\boxed{}. Also, indicate that it is the answer.",

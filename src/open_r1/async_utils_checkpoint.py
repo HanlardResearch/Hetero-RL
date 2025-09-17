@@ -111,8 +111,8 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
     while True:
         sorted_queue_dir = sorted(list(Path(queue_dir).glob("data_*.pt")))
         num_files_of_queue = len(sorted_queue_dir)
-        if num_files_of_queue % world_size != 0:
-            print(f"文件数{num_files_of_queue}不是{world_size}倍数，跳过")
+        if num_files_of_queue % self.args.world_size != 0:
+            print(f"文件数{num_files_of_queue}不是{self.args.world_size}倍数，跳过")
             time.sleep(1.0)
             continue
         wait_for_everyone()

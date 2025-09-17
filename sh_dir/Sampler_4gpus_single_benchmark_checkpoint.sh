@@ -8,6 +8,8 @@ loss_type=$4
 wandb_name=$5
 sampler_id=$6
 ########################## parameters ##########################
+cp /code/tmp/debug/torch_checkpoint_engine.py /opt/conda/envs/openrlhf/lib/python3.10/site-packages/deepspeed/runtime/checkpoint_engine/torch_checkpoint_engine.py
+echo "weights_only=False"
 log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/sampler/${loss_type}/$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 echo $log_path
@@ -49,13 +51,14 @@ fi
 
 #rm $SYNC_WEIGHTS_PATH
 #echo "rm$SYNC_WEIGHTS_PATH"
+# "/extrahome0/HF_models/Qwen/Qwen3-1.7B" \
 accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --num_machines $WORLD_SIZE --machine_rank $RANK  --num_processes=$GPUS  --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT \
   src/open_r1/$scriptname.py --output_dir $SAVEPATH \
   --save_strategy "steps" --save_steps 100000  --save_total_limit  5 \
   --num_train_epochs 3 --gradient_accumulation_steps 8 --max_completion_length 2048 --max_prompt_length 768 \
   --scale_rewards False --eval_strategy 'no' \
-  --model_name_or_path "/extrahome0/HF_models/Qwen/Qwen3-1.7B" \
+  --model_name_or_path "/extrahome0/save_dir/4gpus/Learner_BNPO_think_1th_cfgv6b/Qwen3-1.7B/checkpoint-1024" \
   --dataset_name "/extrahome0/HF_datasets/open-r1/simplelr_qwen_level3to5" \
   --log_completions True --logging_steps 32 \
   --per_device_train_batch_size 8 \
@@ -66,6 +69,6 @@ accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --num_samplers 2 --sampler_id $sampler_id \
   --wandb_name $wandb_name \
   --loss_type $loss_type \
-  --resume_from_checkpoint False \
+  --resume_from_checkpoint True \
   --use_think False \
   --vllm_gpu_memory_utilization $vllm_gpu_memory_utilization > $log_path 2>&1

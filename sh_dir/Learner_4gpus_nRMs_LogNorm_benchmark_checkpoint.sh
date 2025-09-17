@@ -10,7 +10,7 @@ wandb_name=$6
 ########################## parameters ##########################
 log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/learner/${loss_type}/$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
-# checkpoint=/extrahome0/save_dir/4gpus/Learner_EqQ_2th_cfgv6b/Qwen3-1.7B/checkpoint-64
+#checkpoint=/extrahome0/save_dir/4gpus/Learner_BNPO_think_1th_cfgv6b/Qwen3-1.7B/checkpoint-1024
 export WANDB_MODE=offline
 export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/learner/${loss_type}
 export USE_FLASH_ATTN=true
@@ -55,6 +55,3 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --resume_from_checkpoint False \
   --use_think False \
   --eval_on_start False > $log_path 2>&1 &
-
-
-  # --resume_from_checkpoint $checkpoint \

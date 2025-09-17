@@ -461,9 +461,9 @@ class SamplerGRPOTrainer(GRPOTrainer):
             min_value, max_value=0.0, 1.0
             rewards = (rewards - min_value)/(max_value - min_value)
             batch_mean = mean_grouped_rewards.mean()
-            batch_var = mean_grouped_rewards.std()
-            a = (batch_mean*(1-batch_mean)/batch_var-1)*batch_mean if batch_var > 0 else torch.tensor(0.0)
-            b = (batch_mean*(1-batch_mean)/batch_var-1)*(1-batch_mean) if batch_var > 0 else torch.tensor(0.0)
+            batch_var = mean_grouped_rewards.var()
+            a = (batch_mean*(1-batch_mean)/batch_var-1)*batch_mean if batch_var > 0 else torch.tensor(0.0, device=device)
+            b = (batch_mean*(1-batch_mean)/batch_var-1)*(1-batch_mean) if batch_var > 0 else torch.tensor(0.0, device=device)
             alpha = torch.clamp(1+a/3, min=1.0)
             beta = torch.clamp(1+b/3, min=1.0)
             weight = torch.distributions.Beta(alpha, beta).log_prob(mean_grouped_rewards).exp()

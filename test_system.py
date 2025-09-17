@@ -9,7 +9,7 @@ sampling_params = SamplingParams(temperature=0.6, top_p=0.95, top_k=20, max_toke
 
 # Initialize the vLLM engine
 llm = LLM(model="/extrahome0/HF_models/Qwen/Qwen3-1.7B")
-
+llm = LLM(model="/home/ma-user/work/aicc/model/Qwen3-1.7B")
 # # Prepare the input to the model
 # prompt = "Give me a short introduction to large language models."
 # messages = [
