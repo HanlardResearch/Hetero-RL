@@ -31,6 +31,10 @@ for ((i=start; i<=end; i++)); do
         gepo \
         1L2S_GEPO_diff32_nothink_debug_9999_npu \
         $i
+    if [ $i -lt $end ]; then
+        echo "==> Waiting 60 seconds before next job... ($(date '+%Y-%m-%d %H:%M:%S'))"
+        sleep 60
+    fi
 done
 
 echo "All jobs completed."
