@@ -203,22 +203,6 @@ class LogNormalSampler:
         return delay_list
 
 
-
-
-def get_delay_sampler(script_args):
-    SAMPLER_FUNCS_REGISTRY = {
-        "lognormal": LogNormalSampler,
-        "weibull": WeibullSampler,
-    }
-    assert script_args.delay_sampler in SAMPLER_FUNCS_REGISTRY
-    delay_sampler = SAMPLER_FUNCS_REGISTRY[script_args.delay_sampler]
-
-    return delay_sampler(lower_bound=script_args.lower_bound,
-                         upper_bound=script_args.upper_bound,
-                         confidence=script_args.confidence,
-                         default=script_args.default_delay,
-                         )
-
 class NoDelaySampler:
     def __init__(self, lower_bound=60, upper_bound=1920, confidence=0.995, default=60, seed=42):
         """
