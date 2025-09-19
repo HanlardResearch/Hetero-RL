@@ -43,7 +43,7 @@ from transformers import TrainerCallback
 from pathlib import Path
 from trl.extras.profiling import profiling_decorator, profiling_context
 from typing import Any, Union
-from async_utils_checkpoint_fixing_obs import setup_fs_queue, push_to_fs_queue # 新增
+from async_utils_checkpoint_fixing_obs import setup_fs_queue, push_to_fs_queue, obs_isfile # 新增
 
 from transformers import TrainerControl
 import torch.nn.functional as F
@@ -692,7 +692,8 @@ class SamplerGRPOTrainer(GRPOTrainer):
         try:
             start_time = time.time()
             while time.time() - start_time < timeout:  
-                if not self.sync_weights_path.exists():
+                # if not self.sync_weights_path.exists():
+                if not obs_isfile(self.obs_client, self.obs_sync_weights_path):
                     if self.online_mode:
                         time.sleep(0.1)
                         continue

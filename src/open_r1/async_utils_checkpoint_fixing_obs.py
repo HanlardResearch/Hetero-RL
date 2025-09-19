@@ -65,7 +65,7 @@ def obs_listdir(obs_client, obs_path):
     key = hf_obs_dir_format(key)
     assert len(key)>1 #cannot be the root directory
     tmp0 = len(key)
-    ret = [x['key'][tmp0:].split('/',1)[0] for x in obs_client.listObjects(bucket_name, key)['body']['contents']]
+    ret = [x['key'][tmp0:].split('/',1)[0] for x in obs_client.listObjects(bucket_name, key+"data")['body']['contents']]
     ret = sorted({x for x in ret if x})
     return ret
     
@@ -262,7 +262,7 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
         print(f"\nlast_train_model_id:{last_train_model_id}, learner_model_id:{learner_model_id} \n")
 
     while True:
-        sorted_queue_dir = sorted(obs_listdir(self.obs_client, self.obs_queue_dir+"data"))
+        sorted_queue_dir = sorted(obs_listdir(self.obs_client, self.obs_queue_dir))
         num_files_of_queue = len(sorted_queue_dir)
         if num_files_of_queue % self.args.world_size != 0:
             print(f"文件数{num_files_of_queue}不是{self.args.world_size}的倍数，跳过")
