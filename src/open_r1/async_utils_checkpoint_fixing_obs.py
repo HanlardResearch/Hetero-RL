@@ -262,7 +262,7 @@ def pop_from_fs_queue(self, queue_dir: Path, processing_dir: Path, rank: int, ti
         print(f"\nlast_train_model_id:{last_train_model_id}, learner_model_id:{learner_model_id} \n")
 
     while True:
-        sorted_queue_dir = sorted(obs_listdir(self.obs_client, self.obs_queue_dir))
+        sorted_queue_dir = sorted(obs_listdir(self.obs_client, self.obs_queue_dir+"data"))
         num_files_of_queue = len(sorted_queue_dir)
         if num_files_of_queue % self.args.world_size != 0:
             print(f"文件数{num_files_of_queue}不是{self.args.world_size}的倍数，跳过")
