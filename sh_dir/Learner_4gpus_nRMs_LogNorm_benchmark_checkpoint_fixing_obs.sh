@@ -22,13 +22,9 @@ export MASTER_ADDR="localhost"
 export MASTER_PORT=29506
 export SAVEPATH=/extrahome0/save_dir/4gpus/Learner_${xth}_cfg${cfg}/Qwen3-1.7B
 export FS_QUEUE_PATH=/extrahome0/save_dir/4gpus/Async_${xth}_cfg${cfg}/Rollout/Qwen3-1.7B
-export OBS_FS_QUEUE_PATH=obs://yzx/save_dir/4gpus/Async/Rollout/Qwen3-1.7B/queue/
 export SYNC_WEIGHTS_PATH=/extrahome0/save_dir/4gpus/Async_${xth}_cfg${cfg}/tmp/Qwen3-1.7B/async_checkpoint.pt
-export OBS_SYNC_WEIGHTS_PATH=obs://yzx/save_dir/4gpus/Async/tmp/Qwen3-1.7B/async_checkpoint.pt
 export QUEUE_TIMEOUT_SECONDS=3600
-export ACCESS_KEY_ID='K6KBFIJWXB3MUDYMGQ1Z'
-export SECRET_ACCESS_KEY='YaPKVyyiyadMuk0f9DuxiKbhZLNA550zszKqIpgs'
-export OBS_SERVER='112.95.163.82'
+bash sh_dir/setup_obs.sh
 echo $log_path
 # export CUDA_VISIBLE_DEVICES=1,2,3,4
 # rm -r $FS_QUEUE_PATH

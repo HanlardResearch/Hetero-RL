@@ -3,3 +3,5 @@ log_dir
 *.txt
 A100_vs_910A
 kernel_meta
+fusion_result.json
+*local.sh

@@ -24,13 +24,9 @@ export GPUS=1
 export MASTER_ADDR="localhost"
 export SAVEPATH=/home/ma-user/work/save_dir/4gpus/Sampler_${xth}_cfg${cfg}/sampler${sampler_id}/Qwen3-1.7B
 export FS_QUEUE_PATH=/home/ma-user/work/save_dir/4gpus/Async_${xth}_cfg${cfg}/Rollout/Qwen3-1.7B
-export OBS_FS_QUEUE_PATH=obs://yzx/save_dir/4gpus/Async/Rollout/Qwen3-1.7B/queue/
 export SYNC_WEIGHTS_PATH=/home/ma-user/work/save_dir/4gpus/Async_${xth}_cfg${cfg}/tmp/Qwen3-1.7B/async_checkpoint.pt
-export OBS_SYNC_WEIGHTS_PATH=obs://yzx/save_dir/4gpus/Async/tmp/Qwen3-1.7B/async_checkpoint.pt
 export SYNC_SAMPLER_STEPS=1
-export ACCESS_KEY_ID='K6KBFIJWXB3MUDYMGQ1Z'
-export SECRET_ACCESS_KEY='YaPKVyyiyadMuk0f9DuxiKbhZLNA550zszKqIpgs'
-export OBS_SERVER=112.95.163.82
+bash sh_dir/setup_obs.sh
 vllm_gpu_memory_utilization=0.3
 # if ! [[ "$sampler_id" =~ ^[0-3]$ ]]; then
 #   echo "Error: sampler_id must be 0, 1, 2 or 3"
