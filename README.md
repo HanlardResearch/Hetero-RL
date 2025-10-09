@@ -13,7 +13,7 @@
 <h2 align="center">✨ GEPO: Group Expectation Policy Optimization for Heterogeneous RL</h2>
 
 📅 **Release Date**: Aug 25, 2025 (arXiv)  
-📄 **Paper**: [Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning](https://arxiv.org/abs/XXXX.XXXXX)  
+📄 **Paper**: [Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
 🧑‍💻 **Authors**: Han Zhang, Ruibin Zheng, et al. (Pengcheng Lab / Heterogeneous Large Model Research Team)  
 
 ---
