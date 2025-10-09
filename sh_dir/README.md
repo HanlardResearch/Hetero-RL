@@ -1,9 +1,5 @@
 ## [**GEPO: Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning**](https://arxiv.org/abs/2508.17850) 
 
-![GEPO](.。/MainFig.png)
-
-Figure-1: GEPO improves upon GRPO and GSPO by employing group-level importance weights to enhance training stability. In both zero-delay (online) and high-delay (up to 1800 seconds) heterogeneous reinforcement learning scenarios, GEPO demonstrates superior stability and better evaluation performance.
-
 The code is built on [trl](https://github.com/huggingface/trl)/[openR1](https://github.com/huggingface/hetero_rl).
 
 ### Importance weight computation for different policy optimization methods
