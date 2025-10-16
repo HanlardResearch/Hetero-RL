@@ -1,7 +1,15 @@
+<div align="center">
+<img src="figs/image.png" width="200">
+<h3>HeteroRL: Heterogeneous Reinforcement Learning</h3></div>
 
-# ✨ [HeteroRL: Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
-
-> **Codebase**: Built on [`trl`](https://github.com/huggingface/trl) & [`open-r1`](https://github.com/huggingface/open-r1)
+<p align="center">
+  <a href="https://arxiv.org/abs/2508.17850">
+    <img
+      src="https://img.shields.io/badge/Paper-Arxiv%202508.17850-red?logo=arxiv&logoColor=red"
+      alt="Paper on arXiv"
+    />
+  </a>
+</p>
 
 ---
 
@@ -75,7 +83,7 @@ Where `Ê_q[q(y|x)]` is estimated from a group of responses `{y1...yG}` for the 
 
 This group-level denominator **smooths out wild fluctuations**, preventing gradient explosions and keeping training stable — no matter how stale the data is.
 
-![GEPO Architecture](./MainFig.png)
+![GEPO Architecture](figs/MainFig.png)
 
 > **Figure 1**: GEPO improves upon GRPO and GSPO by employing **group-level importance weights** to enhance training stability. It demonstrates superior performance in both **zero-delay (online)** and **high-delay (up to 1800s)** heterogeneous RL scenarios.
 
