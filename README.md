@@ -3,8 +3,6 @@
 
 > **Codebase**: Built on [`trl`](https://github.com/huggingface/trl) & [`open-r1`](https://github.com/huggingface/open-r1)
 
-Sure! Here's a concise and professional English introduction suitable for the top of a GitHub README for the HeteroRL repository:
-
 ---
 
 **HeteroRL** is a novel heterogeneous reinforcement learning framework designed for **stable and scalable training of large language models (LLMs) in geographically distributed, resource-heterogeneous environments**. Traditional RL methods tightly couple rollout generation and policy updates, making them fragile under real-world network latency and hardware diversity. HeteroRL decouples these phases, enabling independent operation of sampler and learner nodes connected over the Internet.
