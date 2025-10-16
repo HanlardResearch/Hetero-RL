@@ -294,6 +294,7 @@ Supports multiple policy optimization methods:
 - [`BNPO`](https://arxiv.org/abs/2506.02864): Beta Normalization Policy Optimization
 - [`Dr.GRPO`](https://arxiv.org/abs/2503.20783): Understanding R1-Zero-Like Training: A Critical Perspective
 - [`GSPO`](https://arxiv.org/abs/2507.18071): Group Sequence Policy Optimization
+- [`GMPO`](https://arxiv.org/abs/2507.20673):  Geometric-Mean Policy Optimization 
 - [`∆L Normalization`](https://arxiv.org/abs/2509.07558): Rethink Loss Aggregation in RLVR
 - **`gepo` (ours)** 👈
 
