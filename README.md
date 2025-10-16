@@ -1,7 +1,6 @@
 <div align="center">
-<img src="figs/image.png" width="200">
+<img src="figs/image.png" width="250">
 <h3>HeteroRL: Heterogeneous Reinforcement Learning</h3></div>
-
 <p align="center">
   <a href="https://arxiv.org/abs/2508.17850">
     <img
