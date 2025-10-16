@@ -1,9 +1,21 @@
+<div align="center">
+<img src="figs/image.png" width="200">
+<h3>HeteroRL: Heterogeneous Reinforcement Learning</h3></div>
 
-# ✨ HeteroRL: Heterogeneous Reinforcement Learning
+<p align="center">
+  <a href="https://arxiv.org/abs/2508.17850">
+    <img
+      src="https://img.shields.io/badge/Paper-Arxiv%202508.17850-red?logo=arxiv&logoColor=red"
+      alt="Paper on arXiv"
+    />
+  </a>
+</p>
 
-> **Paper**: [GEPO: Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
-> **Codebase**: Built on [`trl`](https://github.com/huggingface/trl) & [`open-r1`](https://github.com/huggingface/open-r1)
+---
 
+**HeteroRL** is a novel heterogeneous reinforcement learning framework designed for **stable and scalable training of large language models (LLMs) in geographically distributed, resource-heterogeneous environments**. Traditional RL methods tightly couple rollout generation and policy updates, making them fragile under real-world network latency and hardware diversity. HeteroRL decouples these phases, enabling independent operation of sampler and learner nodes connected over the Internet.
+
+At its core, HeteroRL introduces **Group Expectation Policy Optimization (GEPO)**, an algorithm that replaces fragile token- or sequence-level importance weights with robust **group-level expectation weights**. This innovation exponentially reduces the variance of importance sampling under high policy divergence (caused by latency), ensuring stable training even with delays up to 1800 seconds. Experiments show GEPO achieves state-of-the-art performance and dramatically improved stability—reducing the best-to-last performance gap by 85% compared to prior methods—making it ideal for decentralized, wide-area LLM fine-tuning.
 
 <details open>
 <summary>📢 <strong> BREAKING: GEPO — The Algorithm That Makes Decentralized AI Training Possible!</strong></summary>
@@ -14,7 +26,7 @@
 
 📅 **Release Date**: Aug 25, 2025 (arXiv)  
 📄 **Paper**: [Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
-🧑‍💻 **Authors**: Han Zhang, Ruibin Zheng, et al. (Pengcheng Lab / Heterogeneous Large Model Research Team)  
+🧑‍💻 **Authors**: Pengcheng Lab / Heterogeneous Large Model Research Team
 
 ---
 
@@ -71,7 +83,7 @@ Where `Ê_q[q(y|x)]` is estimated from a group of responses `{y1...yG}` for the 
 
 This group-level denominator **smooths out wild fluctuations**, preventing gradient explosions and keeping training stable — no matter how stale the data is.
 
-![GEPO Architecture](./MainFig.png)
+![GEPO Architecture](figs/MainFig.png)
 
 > **Figure 1**: GEPO improves upon GRPO and GSPO by employing **group-level importance weights** to enhance training stability. It demonstrates superior performance in both **zero-delay (online)** and **high-delay (up to 1800s)** heterogeneous RL scenarios.
 
@@ -108,6 +120,7 @@ GEPO is the engine of **HeteroRL**, a framework that decouples sampling and lear
 ### ⚡ Why It Matters
 GRPO optimizes the **arithmetic mean** of token-level rewards, which is highly sensitive to **outlier importance-weighted rewards**, causing unstable policy updates and extreme importance sampling ratios.  
 GMPO addresses this by switching to the **geometric mean**, which is inherently **robust to outliers** and leads to:
+
 ✅ **Stable importance sampling ratios** (narrower range, fewer extremes)  
 ✅ **Lower training variance** and **more reliable gradients**  
 ✅ **Enhanced exploration** via wider clipping (e.g., `(e⁻⁰·⁴, e⁰·⁴)`) without sacrificing stability  
@@ -137,6 +150,7 @@ GMPO addresses this by switching to the **geometric mean**, which is inherently 
 ### ⚡ Why It Matters
 In RLVR, response lengths vary dramatically — leading to **high gradient variance** and **biased updates** in existing methods (GRPO, DAPO, Dr. GRPO).  
 ∆L Normalization solves both:
+
 ✅ **Unbiased estimator** of true policy gradient  
 ✅ **Theoretically minimal variance** (when `α=1`)  
 ✅ **Plug-and-play** — <10 lines to integrate
@@ -165,6 +179,7 @@ In RLVR, response lengths vary dramatically — leading to **high gradient varia
 ### ⚡ Why It Matters
 Existing methods like **GRPO** suffer from **catastrophic instability** when scaling to large models — especially **MoE architectures** — due to noisy token-level importance ratios.  
 **GSPO fixes this at the root**:
+
 ✅ **Sequence-level importance weights** — Matches reward granularity & reduces variance  
 ✅ **Stable MoE training** — No “Routing Replay” hacks needed 🚫  
 ✅ **Higher training efficiency** — Achieves better performance with same compute  
@@ -193,6 +208,7 @@ Existing methods like **GRPO** suffer from **catastrophic instability** when sca
 ### ⚡ Why It Matters
 Original **GRPO** introduces **length bias** and **difficulty bias** — artificially inflating response lengths (especially for *incorrect* answers) and skewing updates toward “easier” questions.  
 **Dr. GRPO removes these biases at the source**:
+
 ✅ **Unbiased gradient estimator** — Faithfully implements true policy gradient objective  
 ✅ **Token-efficient training** — Prevents wasteful generation of long, incorrect responses 🚫📏  
 ✅ **Plug-and-play replacement** — Drop-in substitute for GRPO with minimal code change  
@@ -220,6 +236,7 @@ Original **GRPO** introduces **length bias** and **difficulty bias** — artific
 ### ⚡ Why It Matters
 Current RL methods like **GRPO** and **REINFORCE** use **static reward normalization** — fixed throughout training — which fails to adapt to the evolving policy distribution, leading to unstable gradients and suboptimal convergence.  
 **BNPO solves this with dynamic, theoretically grounded normalization**:
+
 ✅ **Adaptive Beta normalization** — Parameters `(α, β)` update dynamically with policy evolution  
 ✅ **Proven variance reduction** — Theoretically minimizes gradient variance under binary rewards  
 ✅ **Generalizes GRPO & REINFORCE** — Reduces to them under specific `(α, β)` settings  
@@ -290,8 +307,9 @@ Supports multiple policy optimization methods:
 - [`BNPO`](https://arxiv.org/abs/2506.02864): Beta Normalization Policy Optimization
 - [`Dr.GRPO`](https://arxiv.org/abs/2503.20783): Understanding R1-Zero-Like Training: A Critical Perspective
 - [`GSPO`](https://arxiv.org/abs/2507.18071): Group Sequence Policy Optimization
+- [`GMPO`](https://arxiv.org/abs/2507.20673):  Geometric-Mean Policy Optimization 
 - [`∆L Normalization`](https://arxiv.org/abs/2509.07558): Rethink Loss Aggregation in RLVR
-- **`gepo` (ours)** 👈
+- [**`GEPO` (ours)**](https://arxiv.org/abs/2508.17850)   👈
 
 ```bash
 cd ./open-r1
