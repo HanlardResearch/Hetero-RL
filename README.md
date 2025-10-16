@@ -9,7 +9,7 @@
 
 At its core, HeteroRL introduces **Group Expectation Policy Optimization (GEPO)**, an algorithm that replaces fragile token- or sequence-level importance weights with robust **group-level expectation weights**. This innovation exponentially reduces the variance of importance sampling under high policy divergence (caused by latency), ensuring stable training even with delays up to 1800 seconds. Experiments show GEPO achieves state-of-the-art performance and dramatically improved stability—reducing the best-to-last performance gap by 85% compared to prior methods—making it ideal for decentralized, wide-area LLM fine-tuning.
 
-<details>
+<details open>
 <summary>📢 <strong> BREAKING: GEPO — The Algorithm That Makes Decentralized AI Training Possible!</strong></summary>
 
 <br>
