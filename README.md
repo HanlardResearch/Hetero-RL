@@ -18,7 +18,7 @@ At its core, HeteroRL introduces **Group Expectation Policy Optimization (GEPO)*
 
 📅 **Release Date**: Aug 25, 2025 (arXiv)  
 📄 **Paper**: [Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
-🧑‍💻 **Authors**: Han Zhang, Ruibin Zheng, et al. (Pengcheng Lab / Heterogeneous Large Model Research Team)  
+🧑‍💻 **Authors**: Pengcheng Lab / Heterogeneous Large Model Research Team
 
 ---
 
