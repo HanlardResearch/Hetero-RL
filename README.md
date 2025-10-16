@@ -1,7 +1,6 @@
 
-# ✨ HeteroRL: Heterogeneous Reinforcement Learning
+# ✨ [HeteroRL: Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
 
-> **Paper**: [GEPO: Group Expectation Policy Optimization for Heterogeneous Reinforcement Learning](https://arxiv.org/abs/2508.17850)  
 > **Codebase**: Built on [`trl`](https://github.com/huggingface/trl) & [`open-r1`](https://github.com/huggingface/open-r1)
 
 
