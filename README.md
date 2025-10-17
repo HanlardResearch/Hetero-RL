@@ -20,7 +20,7 @@
 
 
 
-HeteroRL supports a growing family of advanced RL algorithms for LLM training:
+<h4>HeteroRL supports a growing family of advanced RL algorithms for LLM training:</h4></div>
 
 <div align="center">
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
