@@ -16,26 +16,30 @@
 
 
 
-<div align="center">
-<h3>Algorithms supported by Hetero RL</h3></div>
-</div>
 
 
 
-<div align="center">
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2506.02864" target="_blank">Arxiv(BNPO)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2503.20783" target="_blank">Arxiv(Dr.GRPO)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2508.17850" target="_blank">Arxiv(GEPO)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.20673" target="_blank">Arxiv(GMPO)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2402.03300" target="_blank">Arxiv(GRPO)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.18071" target="_blank">Arxiv(GSPO)</a>  
-</div>
+
+HeteroRL supports a growing family of advanced RL algorithms for LLM training:
 
 <div align="center">
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2509.07558" target="_blank">Arxiv(∆L Normlization)</a>
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2506.02864" target="_blank">BNPO</a> ｜
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2503.20783" target="_blank">Dr. GRPO</a> ｜
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2508.17850" target="_blank">GEPO</a> ｜
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2507.20673" target="_blank">GMPO</a> ｜
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2402.03300" target="_blank">GRPO</a> ｜
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2507.18071" target="_blank">GSPO</a> ｜
+<img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
+<a href="https://arxiv.org/abs/2509.07558" target="_blank">ΔL Normalization</a>
 </div>
 
-
+---
 
 **HeteroRL** is a novel heterogeneous reinforcement learning framework designed for **stable and scalable training of large language models (LLMs) in geographically distributed, resource-heterogeneous environments**. Traditional RL methods tightly couple rollout generation and policy updates, making them fragile under real-world network latency and hardware diversity. HeteroRL decouples these phases, enabling independent operation of sampler and learner nodes connected over the Internet.
 
