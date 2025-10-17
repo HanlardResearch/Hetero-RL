@@ -36,7 +36,7 @@ HeteroRL supports a growing family of advanced RL algorithms for LLM training:
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
 <a href="https://arxiv.org/abs/2507.18071" target="_blank">GSPO</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
-<a href="https://arxiv.org/abs/2509.07558" target="_blank">ΔL Normalization</a>
+<a href="https://arxiv.org/abs/2509.07558" target="_blank">VL Norm</a>
 </div>
 
 ---
@@ -336,7 +336,7 @@ Supports multiple policy optimization methods:
 - [`Dr.GRPO`](https://arxiv.org/abs/2503.20783): Understanding R1-Zero-Like Training: A Critical Perspective
 - [`GSPO`](https://arxiv.org/abs/2507.18071): Group Sequence Policy Optimization
 - [`GMPO`](https://arxiv.org/abs/2507.20673):  Geometric-Mean Policy Optimization 
-- [`∆L Normalization`](https://arxiv.org/abs/2509.07558): Rethink Loss Aggregation in RLVR
+- [`VL Norm`](https://arxiv.org/abs/2509.07558): Rethink Loss Aggregation in RLVR
 - [**`GEPO` (ours)**](https://arxiv.org/abs/2508.17850)   👈
 
 ```bash
