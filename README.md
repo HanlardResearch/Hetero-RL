@@ -1,6 +1,10 @@
 <div align="center">
 <img src="figs/image.png" width="250">
 <h2>Hetero RL: Heterogeneous Reinforcement Learning</h2></div>
+</div>
+
+
+  
 <p align="center">
   <a href="https://arxiv.org/abs/2508.17850">
     <img
@@ -10,24 +14,23 @@
   </a>
 </p>
 
----
+
 
 <div align="center">
 <h3>Algorithms supported by Hetero RL</h3></div>
-<p align="center">
+</div>
+
+
 
 <div align="center">
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2506.02864" target="_blank">Arxiv(BNPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2503.20783" target="_blank">Arxiv(Dr.GRPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2509.07558" target="_blank">Arxiv(∆L Norm)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2508.17850" target="_blank">Arxiv(GEPO)</a> 
-<p align="center">
-
-<div align="center">
+<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2508.17850" target="_blank">Arxiv(GEPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.20673" target="_blank">Arxiv(GMPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2402.03300" target="_blank">Arxiv(GRPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.18071" target="_blank">Arxiv(GSPO)</a> 
-<p align="center">
+</div>
 
 
 
