@@ -28,7 +28,10 @@
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2508.17850" target="_blank">Arxiv(GEPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.20673" target="_blank">Arxiv(GMPO)</a> ｜
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2402.03300" target="_blank">Arxiv(GRPO)</a> ｜
-<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.18071" target="_blank">Arxiv(GSPO)</a>  ｜
+<img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2507.18071" target="_blank">Arxiv(GSPO)</a>  
+</div>
+
+<div align="center">
 <img src="figs/arxiv.png" width="14px" style="display:inline;"> <a href="https://arxiv.org/abs/2509.07558" target="_blank">Arxiv(∆L Normlization)</a>
 </div>
 
