@@ -28,7 +28,7 @@
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
 <a href="https://arxiv.org/abs/2503.20783" target="_blank">Dr. GRPO</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
-<a href="https://arxiv.org/abs/2508.17850" target="_blank">GEPO</a> ｜
+<a href="https://arxiv.org/abs/2508.17850" target="_blank">GEPO*</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
 <a href="https://arxiv.org/abs/2507.20673" target="_blank">GMPO</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
