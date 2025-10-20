@@ -337,7 +337,7 @@ Supports multiple policy optimization methods:
 - [`GSPO`](https://arxiv.org/abs/2507.18071): Group Sequence Policy Optimization
 - [`GMPO`](https://arxiv.org/abs/2507.20673):  Geometric-Mean Policy Optimization 
 - [`VL Norm`](https://arxiv.org/abs/2509.07558): Rethink Loss Aggregation in RLVR
-- [**`GEPO` (ours)**](https://arxiv.org/abs/2508.17850)   👈
+- [**`GEPO`**](https://arxiv.org/abs/2508.17850): Group Expectation Policy Optimization (ours)  👈
 
 ```bash
 cd ./open-r1
