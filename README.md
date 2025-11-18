@@ -36,11 +36,11 @@
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
 <a href="https://arxiv.org/abs/2507.18071" target="_blank">GSPO</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
-<a href="https://arxiv.org/abs/2509.07558" target="_blank">VL Norm</a>
+<a href="https://arxiv.org/abs/2509.07558" target="_blank">VL Norm</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
-<a href="https://arxiv.org/abs/2506.13585" target="_blank">CISPO</a>
+<a href="https://arxiv.org/abs/2506.13585" target="_blank">CISPO</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
-<a href="https://arxiv.org/abs/2503.14286" target="_blank">TOPR</a>
+<a href="https://arxiv.org/abs/2503.14286" target="_blank">TOPR</a> ｜
 <img src="figs/arxiv.png" width="14" style="display:inline; margin-right: 4px;">
 <a href="https://arxiv.org/abs/1802.01561" target="_blank">IMPALA</a>
 </div>
