@@ -66,13 +66,13 @@ from datasets import load_dataset
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint, speed_metrics
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from hetero_rl.configs import GRPOConfig, HeteroRLScriptArguments
-from hetero_rl.rewards import get_reward_funcs
-from hetero_rl.utils import get_tokenizer
-from hetero_rl.utils.callbacks import get_callbacks
-from hetero_rl.utils.wandb_logging import init_wandb_training
+from open_r1.configs import GRPOConfig, GRPOScriptArguments, GPGConfig
+from open_r1.rewards import get_reward_funcs
+from open_r1.utils import get_tokenizer
+from open_r1.utils.callbacks import get_callbacks
+from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
-from hetero_rl.utils.data_utils import custom_loading_dataset
+from open_r1.utils.data_utils import custom_loading_dataset, loading_deepmath
 from transformers import TrainerCallback
 from pathlib import Path
 
@@ -761,9 +761,14 @@ class Learner_MoISTrainer(Trainer):
         normlized_q = sampler_seq_p.detach() / (sampler_seq_p.sum().detach())
         E_qP =  (normlized_q * learner_seq_p).sum()
         E_qQ =  (normlized_q * sampler_seq_p).sum()
+        # loss_bias = (learner_seq_p.detach() / E_qQ - learner_seq_p.detach() / sampler_seq_p) * advantages
+        # mse_loss_bias = loss_bias.square().mean().detach()
+
+        bias_GSPO = ((learner_seq_p.detach() / sampler_seq_p) *advantages).mean().square()
+        bias_GEPO =  ((learner_seq_p.detach()/ E_qQ)  *advantages).mean().square()
 
         # Compute the loss
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo","delta_ln","gmpo" ]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "delta_ln"]:
             coef_1 = torch.exp(per_token_logps - old_per_token_logps)
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             # Two-sided clipping
@@ -792,11 +797,34 @@ class Learner_MoISTrainer(Trainer):
                 coef_deltaL = (L_alpha/LM).unsqueeze(1) # [bs, sql]
                 loss = (coef_deltaL * per_token_loss * completion_mask).sum()
 
+        elif self.loss_type == "cispo":
+            coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+            # the key point: forward value is clip(p/q), but backward gradient is $\nabla \log(p)$
+            # Eq(4) in paper https://arxiv.org/pdf/2506.13585
+            coef_2 = per_token_logps -per_token_logps.detach() +  torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high).detach()
+            # the key point: the token that p/q not in the range [1 - self.epsilon_low, 1 + self.epsilon_high] shoule be dropped
+            # Eq(7) in paper https://arxiv.org/pdf/2506.13585
+            with torch.no_grad():
+                cond1 = (advantages.unsqueeze(1) > 0) & (coef_1 > 1 + self.epsilon_high)
+                cond2 = (advantages.unsqueeze(1) < 0) & (coef_1 < 1 - self.epsilon_low)
+                M = (~ (cond1 | cond2)).float()
+            per_token_loss = coef_2 * advantages.unsqueeze(1) * M
+            loss = -(per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+
+        elif self.loss_type == "tis":
+            coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+            coef_2 = per_token_logps -per_token_logps.detach() +  torch.clamp(coef_1, 0, 1 ).detach()
+            per_token_loss = coef_2 * advantages.unsqueeze(1)
+            loss = -(per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+
+
+
         elif self.loss_type == "gmpo": #  Geometric-Mean Policy Optimization https://arxiv.org/pdf/2507.20673
             # Clipping at token-level & Clipping wider
             sgn_A = torch.sign(advantages)
             coef_1 = sgn_A.unsqueeze(1) * (per_token_logps - old_per_token_logps)
-            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            # coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            coef_2 = torch.clamp(coef_1, math.log(1 - self.epsilon_low), math.log(1 + self.epsilon_high))
             sgn_A_log_probs_diff_min = torch.min(coef_1, coef_2)
             log_probs_diff_min = sgn_A.unsqueeze(1) * sgn_A_log_probs_diff_min
             # Geometric-Mean Policy Optimization
@@ -804,7 +832,17 @@ class Learner_MoISTrainer(Trainer):
                 (log_probs_diff_min * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0))
             loss = -(advantages * importance_sampling_ratio).mean()
 
-        elif self.loss_type in ["EqP", "gepo", "gepo+","gspo"]:
+        elif self.loss_type == "topr":
+            with torch.no_grad():
+                cond1 = (advantages >= 0).int()
+                cond2 = (advantages < 0).int()
+            coef_1 = learner_seq_p.detach() / sampler_seq_p
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            coef_3 = (cond1 + cond2 * coef_2) * learner_seq_p
+            per_seq_loss = -coef_3*advantages
+            loss = per_seq_loss.mean()
+
+        elif self.loss_type in ["EqP", "gepo", "gepo+","gspo",'ds-gspo']:
             if self.loss_type == "EqP":
                 coef_1 = learner_seq_p / E_qP
             elif self.loss_type == "gepo":
@@ -817,14 +855,45 @@ class Learner_MoISTrainer(Trainer):
                 # 二值模式
                 pou = (cppo_per_seq_kl < self.script_args.kl_temp).float()
                 coef_1 = learner_seq_p / ((1 - pou) * E_qQ + pou * sampler_seq_p)
-
             elif self.loss_type == "gspo":
                 coef_1 = learner_seq_p / sampler_seq_p
+            elif self.loss_type == "ds-gspo":
+                coef_1 = learner_seq_p / (sampler_seq_p*(1-0.005)+learner_seq_p.detach()*0.005)
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             per_seq_loss1 = coef_1 * advantages
             per_seq_loss2 = coef_2 * advantages
             per_seq_loss = -torch.min(per_seq_loss1, per_seq_loss2)
             loss = per_seq_loss.mean()
+
+        elif self.loss_type in ["c-grpo","c-gspo","c-gepo",]:
+            if self.loss_type == "c-gspo":
+                coef_1 = learner_seq_p / sampler_seq_p
+                low_bound = 1.0 - self.epsilon_low
+                high_bound = 1.0 + self.epsilon_high
+                # 保留梯度的重要性权重截断
+                coef_2 = torch.where(coef_1 < low_bound,
+                                     (learner_seq_p / learner_seq_p.detach()) * low_bound,
+                                     torch.where(coef_1 > high_bound,
+                                                 (learner_seq_p / learner_seq_p.detach()) * high_bound,
+                                                 coef_1))
+                per_seq_loss1 = coef_1 * advantages
+                per_seq_loss2 = coef_2 * advantages
+                per_seq_loss = -torch.min(per_seq_loss1, per_seq_loss2)
+                loss = per_seq_loss.mean()
+            elif self.loss_type == "c-gepo":
+                coef_1 = learner_seq_p / E_qQ
+                low_bound = 1.0 - self.epsilon_low
+                high_bound = 1.0 + self.epsilon_high
+                # 保留梯度的重要性权重截断
+                coef_2 = torch.where(coef_1 < low_bound,
+                                     (learner_seq_p / learner_seq_p.detach()) * low_bound,
+                                     torch.where(coef_1 > high_bound,
+                                                 (learner_seq_p / learner_seq_p.detach()) * high_bound,
+                                                 coef_1))
+                per_seq_loss1 = coef_1 * advantages
+                per_seq_loss2 = coef_2 * advantages
+                per_seq_loss = -torch.min(per_seq_loss1, per_seq_loss2)
+                loss = per_seq_loss.mean()
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -840,7 +909,7 @@ class Learner_MoISTrainer(Trainer):
         # var_ratio_gspo = (ratio_gspo.square() * normlized_q).sum() - (ratio_gspo * normlized_q).sum().square()
         # var_P_EqQ =  (ratio_pEqQ.square() * normlized_q).sum() - (ratio_pEqQ * normlized_q).sum().square()
         # var_P_EqP =  (ratio_pEqP.square() * normlized_q).sum() - (ratio_pEqP * normlized_q).sum().square()
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "delta_ln", "gmpo", "cispo",  "tis"]:
             var_coef1 = ((coef_1 * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
             var_coef2 = ((coef_2 * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
         else:
@@ -876,6 +945,9 @@ class Learner_MoISTrainer(Trainer):
         self._metrics[mode]["learner_entropy"].append(learner_entropy.item())
 
         self._metrics[mode]["cppo_kl"].append(loss_cppo_kl.item())
+        # self._metrics[mode]["mse_loss_bias"].append(mse_loss_bias.item())
+        self._metrics[mode]["bias_gepo"].append(bias_GEPO.item())
+        self._metrics[mode]["bias_gspo"].append(bias_GSPO.item())
 
         if self.loss_type in ["grpo", "bnpo", "dr_grpo","delta_ln"]:
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
@@ -997,7 +1069,8 @@ class Learner_MoISTrainer(Trainer):
         # See _get_train_sampler for an explanation of the sampler.
         return RepeatSampler(
             data_source=eval_dataset,
-            mini_repeat_count=self.num_generations,
+            # mini_repeat_count=self.num_generations,
+            mini_repeat_count=8,# avg@8 20251116 08:47
             seed=self.args.seed,
         )
 
@@ -1992,7 +2065,7 @@ class Learner_MoISTrainer(Trainer):
                     # for kk in table:
                     #     print(f"{kk}:{len(table[kk])}")
 
-                    # torch.save(table,f"/userhome/Research_HUB/GPG/hetero_rl/wandb/debug/table.pt")
+                    # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
@@ -2065,13 +2138,16 @@ def main(script_args, training_args, model_args):
     # Load tokenizer
     ################
     tokenizer = get_tokenizer(model_args, training_args)
-
-
     # handle dataset
     # Load the dataset
     if 'simplelr_qwen_level3to5' in script_args.dataset_name:
-        dataset = custom_loading_dataset(script_args.dataset_name, max_length=training_args.max_prompt_length, tokenizer=tokenizer)
-
+        dataset = custom_loading_dataset(script_args.dataset_name,
+                                         max_length=training_args.max_prompt_length,
+                                         tokenizer=tokenizer)
+    elif "deepmath" in script_args.dataset_name:
+        dataset = loading_deepmath(script_args.dataset_name,
+                                   max_length=training_args.max_prompt_length,
+                                   tokenizer=tokenizer)
     else:
         dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
@@ -2213,7 +2289,7 @@ def main(script_args, training_args, model_args):
     # Save everything else on main process
     kwargs = {
         "dataset_name": script_args.dataset_name,
-        "tags": ["hetero_rl"],
+        "tags": ["open-r1"],
     }
     if trainer.accelerator.is_main_process:
         trainer.create_model_card(**kwargs)
@@ -2221,26 +2297,26 @@ def main(script_args, training_args, model_args):
         trainer.model.config.use_cache = True
         trainer.model.config.save_pretrained(training_args.output_dir)
 
-    ##########
-    # Evaluate
-    ##########
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate()
-        metrics["eval_samples"] = len(dataset[script_args.dataset_test_split])
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    #############
-    # push to hub
-    #############
-    if training_args.push_to_hub:
-        logger.info("Pushing to hub...")
-        trainer.push_to_hub(**kwargs)
+    # ##########
+    # # Evaluate
+    # ##########
+    # if training_args.do_eval:
+    #     logger.info("*** Evaluate ***")
+    #     metrics = trainer.evaluate()
+    #     metrics["eval_samples"] = len(dataset[script_args.dataset_test_split])
+    #     trainer.log_metrics("eval", metrics)
+    #     trainer.save_metrics("eval", metrics)
+    #
+    # #############
+    # # push to hub
+    # #############
+    # if training_args.push_to_hub:
+    #     logger.info("Pushing to hub...")
+    #     trainer.push_to_hub(**kwargs)
 
 
 if __name__ == "__main__":
-    parser = TrlParser((HeteroRLScriptArguments, GRPOConfig, ModelConfig))
+    parser = TrlParser((GRPOScriptArguments, GPGConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config(fail_with_unknown_args=False)
     main(script_args, training_args, model_args)
 

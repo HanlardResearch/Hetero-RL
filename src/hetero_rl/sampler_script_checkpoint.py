@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+readme="""【版本说明】
+Version: v5
+退火重要性采样时，保留sampler 概率
+"""
+
 from contextlib import nullcontext
 import time
 import inspect
@@ -23,13 +28,13 @@ import torch
 import transformers
 from datasets import load_dataset
 from transformers.trainer_utils import get_last_checkpoint
-from hetero_rl.configs import HeteroRLScriptArguments, GRPOConfig
-from hetero_rl.rewards import get_reward_funcs
-from hetero_rl.utils import get_tokenizer
-from hetero_rl.utils.callbacks import get_callbacks
-from hetero_rl.utils.wandb_logging import init_wandb_training
+from open_r1.configs import MoISScriptArguments, GRPOConfig
+from open_r1.rewards import get_reward_funcs
+from open_r1.utils import get_tokenizer
+from open_r1.utils.callbacks import get_callbacks
+from open_r1.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
-from hetero_rl.utils.data_utils import custom_loading_dataset
+from open_r1.utils.data_utils import custom_loading_dataset, loading_deepmath
 from transformers import TrainerCallback
 from pathlib import Path
 from trl.extras.profiling import profiling_decorator, profiling_context
@@ -56,7 +61,7 @@ from trl.trainer.utils import (
     pad,
 )
 from accelerate.utils import reduce, broadcast
-from hetero_rl.time_delay import get_delay_sampler
+from open_r1.Time_Delay import get_delay_sampler
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -411,7 +416,7 @@ class SamplerGRPOTrainer(GRPOTrainer):
 
             sampler_per_token_logps = self._get_per_token_logps(
                 self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-            ) if self.loss_type in ["grpo","bnpo", "dr_grpo", "gspo", "gepo", "EqP", "gepo+"] else None
+            ) #if self.loss_type in ["grpo","bnpo", "dr_grpo", "gspo", "gepo", "EqP", "delta_ln", "gmpo", "gepo+"] else None
             
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -467,7 +472,7 @@ class SamplerGRPOTrainer(GRPOTrainer):
         else:
             # Normalize the rewards to compute the advantages
             advantages = rewards - mean_grouped_rewards
-            if self.loss_type in ["grpo", "gspo"] or self.scale_rewards:
+            if self.scale_rewards:
                 advantages = advantages / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
@@ -536,7 +541,7 @@ class SamplerGRPOTrainer(GRPOTrainer):
                     }
 
                     # print(f"table is done (sampler_script_v2.py)")
-                    # torch.save(table,f"/userhome/Research_HUB/GPG/hetero_rl/wandb/debug/table.pt")
+                    # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
@@ -751,7 +756,10 @@ def main(script_args, training_args, model_args):
     # Load the dataset
     if 'simplelr_qwen_level3to5' in script_args.dataset_name:
         dataset = custom_loading_dataset(script_args.dataset_name, max_length=training_args.max_prompt_length, tokenizer=tokenizer)
-
+    elif "deepmath" in script_args.dataset_name:
+        dataset = loading_deepmath(script_args.dataset_name,
+                                   max_length=training_args.max_prompt_length,
+                                   tokenizer=tokenizer)
     else:
         dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
@@ -852,7 +860,7 @@ def main(script_args, training_args, model_args):
     trainer.run_sampling_loop(file_path)
 
 if __name__ == "__main__":
-    parser = TrlParser((HeteroRLScriptArguments, GRPOConfig, ModelConfig))
+    parser = TrlParser((MoISScriptArguments, GRPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config(fail_with_unknown_args=False)
     main(script_args, training_args, model_args)
 

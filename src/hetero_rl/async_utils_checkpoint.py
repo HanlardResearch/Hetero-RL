@@ -190,3 +190,70 @@ class SamplerSyncCallback(TrainerCallback):
                            temp_path)  # d20250717修改
                 os.rename(temp_path, self.sync_weights_path)
                 print(f"[Learner] Step {state.global_step}: Synced weights for sampler at {self.sync_weights_path}")
+
+
+# =================================================================================
+# 3. 按照概率决策是否同步模型权重
+# =================================================================================
+
+class CMDP_SamplerSyncCallback(TrainerCallback):
+    def __init__(self, trainer, sync_weights_path: Path):
+        self.trainer = trainer
+        self.sync_weights_path = sync_weights_path
+        self.last_synced_step = -1
+
+    def on_step_end(self, args: TrainingArguments, state, control, model: nn.Module, **kwargs):
+        if state.global_step > self.last_synced_step:
+            if state.is_world_process_zero:
+
+                p_sync = self.trainer.state.p_sync
+                self.trainer.state.kl_accum = 0.0
+                self.trainer.state.accum_count = 0
+
+                if p_sync is None: # 如果未设置，可选择默认行为（如不 sync）
+                    return
+                should_sync = random.random() < p_sync # 按概率决定是否同步
+
+                force_sync = self.trainer._metrics['train']['step_diff'][0] == self.trainer.script_args.max_diff_step
+
+                if should_sync or force_sync:
+                    self.last_synced_step = state.global_step
+                    self.trainer.state.sync_model_times +=1
+                    unwrapped_model = self.trainer.accelerator.unwrap_model(model)
+                    temp_path = self.sync_weights_path.with_suffix(".tmp")
+                    temp_path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save((control.should_save, state.global_step, unwrapped_model.state_dict()),
+                               temp_path)  # d20250717修改
+                    os.rename(temp_path, self.sync_weights_path)
+                    print(f"[Learner] Step {state.global_step}: Synced weights (p_sync={p_sync:.3f},force_sync={force_sync}) for sampler at {self.sync_weights_path}")
+
+
+
+class UCB_SamplerSyncCallback(TrainerCallback):
+    def __init__(self, trainer, sync_weights_path: Path):
+        self.trainer = trainer
+        self.sync_weights_path = sync_weights_path
+        self.last_synced_step = -1
+
+    def on_step_end(self, args: TrainingArguments, state, control, model: nn.Module, **kwargs):
+        if state.global_step > self.last_synced_step:
+            if state.is_world_process_zero:
+                p_sync = self.trainer.state.p_sync
+                if p_sync is None: # 如果未设置，可选择默认行为（如不 sync）
+                    return
+                should_sync = random.random() < p_sync # 按概率决定是否同步
+                force_sync = self.trainer._metrics['train']['step_diff'][0] == self.trainer.script_args.max_diff_step
+
+                if should_sync or force_sync:
+                    if should_sync:
+                        self.trainer.state.accum_count = 0
+                        self.trainer.state.entropy_accum = 0.0
+                        self.trainer.state.sync_model_times +=1
+                    self.last_synced_step = state.global_step
+                    unwrapped_model = self.trainer.accelerator.unwrap_model(model)
+                    temp_path = self.sync_weights_path.with_suffix(".tmp")
+                    temp_path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save((control.should_save, state.global_step, unwrapped_model.state_dict()),
+                               temp_path)  # d20250717修改
+                    os.rename(temp_path, self.sync_weights_path)
+                    print(f"[Learner] Step {state.global_step}: Synced weights (p_sync={p_sync:.3f},force_sync={force_sync}) for sampler at {self.sync_weights_path}")
