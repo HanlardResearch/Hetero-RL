@@ -73,7 +73,7 @@ accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --num_generations $num_generations \
   --cppo_beta $cppo_beta \
   --wandb_entity "pcl-zh" --wandb_project "GPG"  --report_to "wandb" \
-  --config recipes/AsyncGRPO/config_simple_rl_math_l35_nRMs_$3.yaml \
+  --config recipes/HeteroRL/config_${cfg}.yaml \
   --num_samplers 2 --sampler_id $sampler_id \
   --wandb_name $wandb_name \
   --loss_type $loss_type \

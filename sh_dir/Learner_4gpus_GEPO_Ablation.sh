@@ -51,7 +51,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --eval_strategy 'steps' --eval_steps 64 \
   --wandb_entity "pcl-zh" --wandb_project "GPG"  --report_to "wandb" \
   --log_completions False --logging_steps 1 \
-  --config recipes/AsyncGRPO/config_simple_rl_math_l35_nRMs_${cfg}.yaml \
+  --config recipes/HeteroRL/config_${cfg}.yaml \
   --vllm_gpu_memory_utilization 0.25  \
   --max_completion_length 2048 \
   --per_device_train_batch_size 8 \
