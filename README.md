@@ -313,10 +313,20 @@ elif self.loss_type == "gepo":
 
 > 📁 Enter the project directory first. Adjust paths in scripts if your directory differs.
 
+### Environment Setup
+
+```bash
+conda create -n hetero-rl python=3.10.16
+conda activate hetero-rl
+cd ./Hetero-RL
+pip install -r requirements.txt
+```
+
+
 ### 1️⃣ Launch the Learner (4×A100 80GB)
 
 ```bash
-cd ./open-r1
+cd ./Hetero-RL
 CUDA_VISIBLE_DEVICES=0,1,2,3 bash sh_dir/HeteroRL_Learner_4gpus.sh learner_script_checkpoint GEPO_think_1th 1 v6b gepo 1L2S_GEPO_diff32_think
 ```
 
@@ -346,7 +356,7 @@ Supports multiple policy optimization methods:
 - [**`GEPO`**](https://arxiv.org/abs/2508.17850): Group Expectation Policy Optimization (ours)  👈
 
 ```bash
-cd ./open-r1
+cd ./Hetero-RL
 CUDA_VISIBLE_DEVICES="0,1,2,3" MASTER_PORT=29510 bash sh_dir/Online_gXpo_4gpus.sh gepo
 ```
 
