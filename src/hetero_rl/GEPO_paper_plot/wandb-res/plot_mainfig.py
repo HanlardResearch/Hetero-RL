@@ -86,13 +86,13 @@ def plot_diff32(df, savepath,
 
 
 if __name__ == '__main__':
-    df_diff32 = pd.read_csv("D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\wandb_diff32.csv")
-    df_online = pd.read_csv("D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\wandb_online.csv")
+    df_diff32 = pd.read_csv("D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\wandb_diff32.csv")
+    df_online = pd.read_csv("D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\wandb_online.csv")
 
     df_online =df_online[::2]
     # df_diff32 = df_diff32[::2]
-    path_diff32="D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\wandb_diff32.svg"
-    path_online="D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\wandb_online.svg"
+    path_diff32="D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\wandb_diff32.svg"
+    path_online="D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\wandb_online.svg"
 
 
     plot_online(df_online, path_online)

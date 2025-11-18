@@ -47,7 +47,7 @@ evaluate:
 			--output-dir data/evals/$(MODEL); \
 	else \
 		lighteval vllm $$MODEL_ARGS "custom|$(TASK)|0|0" \
-			--custom-tasks src/open_r1/evaluate.py \
+			--custom-tasks src/hetero_rl/evaluate.py \
 			--use-chat-template \
 			--output-dir data/evals/$(MODEL); \
 	fi

@@ -717,7 +717,7 @@ class OnlineRLTrainer(GRPOTrainer):
                     }
 
                     # print(f"table is done (sampler_script_v2.py)")
-                    # torch.save(table,f"/userhome/Research_HUB/GPG/hetero_rl/wandb/debug/table.pt")
+                    # torch.save(table,f"/workspace/hetero_rl/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})

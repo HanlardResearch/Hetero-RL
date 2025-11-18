@@ -11,13 +11,13 @@ ModelPath="/extrahome0/HF_models/Qwen/Qwen3-1.7B"
 ########################## parameters ##########################
 
 
-log_path=/userhome/Research_HUB/GPG/Hetero-RL/log_dir/rebuttal/learner/${loss_type}/${wandb_name}_$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
+log_path=/workspace/Hetero-RL/log_dir/rebuttal/learner/${loss_type}/${wandb_name}_$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/Hetero-RL/wandb/rebuttal/learner/${loss_type}
+export WANDB_DIR=/workspace/Hetero-RL/wandb/rebuttal/learner/${loss_type}
 export USE_FLASH_ATTN=true
-export PYTHONPATH=/userhome/Research_HUB/GPG/Hetero-RL/src
+export PYTHONPATH=/workspace/Hetero-RL/src
 export WORLD_SIZE=1
 export RANK=0
 export GPUS=4

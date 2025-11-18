@@ -15,13 +15,13 @@ ModelPath="/extrahome0/HF_models/Qwen/Qwen3-1.7B" \
 #ModelPath="/extrahome0/save_dir/4gpus/Learner_GEPO+_2k_cfgv6b/Qwen3-1.7B/checkpoint-1088"
 ########################## resume_from_checkpoint ##########################
 
-log_path=/userhome/Research_HUB/GPG/Hetero-RL/log_dir/rebuttal/sampler/${loss_type}/${wandb_name}_$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
+log_path=/workspace/Hetero-RL/log_dir/rebuttal/sampler/${loss_type}/${wandb_name}_$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 echo $log_path
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/Hetero-RL/wandb/rebuttal/sampler${sampler_id}
+export WANDB_DIR=/workspace/Hetero-RL/wandb/rebuttal/sampler${sampler_id}
 export USE_FLASH_ATTN=true
-export PYTHONPATH=/userhome/Research_HUB/GPG/Hetero-RL/src
+export PYTHONPATH=/workspace/Hetero-RL/src
 export WORLD_SIZE=1
 export RANK=0
 export GPUS=4

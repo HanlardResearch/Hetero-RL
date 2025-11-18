@@ -144,10 +144,10 @@ def plot_online_kl(df, savepath,
 
 
 if __name__ == '__main__':
-    df_online = pd.read_csv("D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\wandb_LearnerSamplerKL.csv")
+    df_online = pd.read_csv("D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\wandb_LearnerSamplerKL.csv")
 
     df_online =df_online[::2]
-    path_online="D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\LearnerSamplerKL.pdf"
+    path_online="D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\LearnerSamplerKL.pdf"
 
 
     plot_online_kl(df_online, path_online)

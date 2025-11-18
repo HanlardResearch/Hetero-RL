@@ -46,7 +46,7 @@ bash sh_dir/HeteroRL_Sampler_4gpus.sh sampler_script_checkpoint GEPO_think_1th v
 
 We support [grpo](https://arxiv.org/abs/2402.03300)/[bnpo](https://arxiv.org/abs/2506.02864)/[dr_grpo](https://arxiv.org/abs/2503.20783)/[gspo](https://arxiv.org/abs/2507.18071)/[∆L Normalization](https://arxiv.org/abs/2509.07558)/[***gepo*** (ours)](https://arxiv.org/abs/2508.17850) loss currently.
 ```shell
-cd /userhome/Research_HUB/GPG/hetero_rl
+cd /workspace/hetero_rl
 CUDA_VISIBLE_DEVICES="0,1,2,3" MASTER_PORT=29510 bash sh_dir/Online_gXpo_4gpus.sh gepo
 ```
 ### Citation

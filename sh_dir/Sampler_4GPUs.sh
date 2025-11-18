@@ -11,13 +11,13 @@ sampler_id=$6
 cp /code/tmp/debug/torch_checkpoint_engine.py /opt/conda/envs/openrlhf/lib/python3.10/site-packages/deepspeed/runtime/checkpoint_engine/torch_checkpoint_engine.py
 echo "weights_only=False"
 
-log_path=/userhome/Research_HUB/GPG/hetero_rl/log_dir/sampler/${loss_type}/$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
+log_path=/workspace/hetero_rl/log_dir/sampler/${loss_type}/$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 echo $log_path
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/hetero_rl/wandb/sampler${sampler_id}
+export WANDB_DIR=/workspace/hetero_rl/wandb/sampler${sampler_id}
 export USE_FLASH_ATTN=true
-export PYTHONPATH=/userhome/Research_HUB/GPG/hetero_rl/src
+export PYTHONPATH=/workspace/Hetero-RL/src
 export WORLD_SIZE=1
 export RANK=0
 export GPUS=4
@@ -43,7 +43,7 @@ elif [[ $sampler_id -eq 1 ]]; then
 
 accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --num_machines $WORLD_SIZE --machine_rank $RANK  --num_processes=$GPUS  --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT \
-  src/open_r1/$scriptname.py --output_dir $SAVEPATH \
+  src/hetero_rl/$scriptname.py --output_dir $SAVEPATH \
   --save_strategy "steps" --save_steps 100000  --save_total_limit  5 \
   --num_train_epochs 3 --gradient_accumulation_steps 8 --max_completion_length 2048 --max_prompt_length 768 \
   --scale_rewards False --eval_strategy 'no' \

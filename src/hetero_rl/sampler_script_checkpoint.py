@@ -541,7 +541,7 @@ class SamplerGRPOTrainer(GRPOTrainer):
                     }
 
                     # print(f"table is done (sampler_script_v2.py)")
-                    # torch.save(table,f"/userhome/Research_HUB/GPG/Hetero-RL/wandb/debug/table.pt")
+                    # torch.save(table,f"/workspace/Hetero-RL/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})

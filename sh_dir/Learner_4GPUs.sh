@@ -8,12 +8,12 @@ cfg=$4
 loss_type=$5
 wandb_name=$6
 ########################## parameters ##########################
-log_path=/userhome/Research_HUB/GPG/hetero_rl/log_dir/learner/${loss_type}/$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
+log_path=/workspace/hetero_rl/log_dir/learner/${loss_type}/$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/hetero_rl/wandb/learner/${loss_type}
+export WANDB_DIR=/workspace/hetero_rl/wandb/learner/${loss_type}
 export USE_FLASH_ATTN=true
-export PYTHONPATH=/userhome/Research_HUB/GPG/hetero_rl/src
+export PYTHONPATH=/workspace/Hetero-RL/src
 export WORLD_SIZE=1
 export RANK=0
 export GPUS=4
@@ -30,7 +30,7 @@ rm -r $FS_QUEUE_PATH
 rm $SYNC_WEIGHTS_PATH
 accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   --num_machines $WORLD_SIZE --machine_rank $RANK  --num_processes=$GPUS  --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT \
-  src/open_r1/$scriptname.py --output_dir $SAVEPATH \
+  src/hetero_rl/$scriptname.py --output_dir $SAVEPATH \
   --max_prompt_length 768 \
   --scale_rewards False \
   --model_name_or_path "/extrahome0/HF_models/Qwen/Qwen3-1.7B" \

@@ -130,10 +130,10 @@ def plot_onlineAMC23(df, savepath,
     plt.close()
 
 if __name__ == '__main__':
-    df_online = pd.read_csv("D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\wandb_diff64_amc23.csv")
+    df_online = pd.read_csv("D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\wandb_diff64_amc23.csv")
 
     # df_online =df_online[::2]
-    path_online="D:\Research_HUB\GPG\hetero_rl\src\open_r1\GEPO_paper_plot\wandb-res\diff64_amc23.pdf"
+    path_online="D:\workspace\Hetero-RL\src\hetero_rl\GEPO_paper_plot\wandb-res\diff64_amc23.pdf"
 
 
     plot_onlineAMC23(df_online, path_online)
