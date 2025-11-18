@@ -11,21 +11,13 @@ ModelPath="/extrahome0/HF_models/Qwen/Qwen3-1.7B"
 ########################## parameters ##########################
 
 
-########################## resume_from_checkpoint ##########################
-#cp /userhome/Research_HUB/GPG/open-r1/src/open_r1/weight_only/torch_checkpoint_engine.py /opt/conda/envs/openrlhf/lib/python3.10/site-packages/deepspeed/runtime/checkpoint_engine/torch_checkpoint_engine.py
-#echo "weights_only=False"
-# #######################
-
-
-
-
-log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/rebuttal/learner/${loss_type}/${wandb_name}_$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
+log_path=/userhome/Research_HUB/GPG/Hetero-RL/log_dir/rebuttal/learner/${loss_type}/${wandb_name}_$1_$2_SyncF$3_cfg${cfg}_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/rebuttal/learner/${loss_type}
+export WANDB_DIR=/userhome/Research_HUB/GPG/Hetero-RL/wandb/rebuttal/learner/${loss_type}
 export USE_FLASH_ATTN=true
-export PYTHONPATH=/userhome/Research_HUB/GPG/open-r1/src
+export PYTHONPATH=/userhome/Research_HUB/GPG/Hetero-RL/src
 export WORLD_SIZE=1
 export RANK=0
 export GPUS=4
@@ -45,7 +37,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero2_4A100s.yaml \
   src/hetero_rl/$scriptname.py --output_dir $SAVEPATH \
   --max_prompt_length 768 \
   --model_name_or_path $ModelPath \
-  --dataset_name "/extrahome0/HF_datasets/open-r1/simplelr_qwen_level3to5" \
+  --dataset_name "/extrahome0/HF_datasets/Hetero-RL/simplelr_qwen_level3to5" \
   --max_steps 1295 \
   --save_strategy "steps" --save_steps 64  --save_total_limit  1 \
   --eval_strategy 'steps' --eval_steps 64 \

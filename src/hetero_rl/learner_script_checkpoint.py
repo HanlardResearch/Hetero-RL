@@ -66,13 +66,13 @@ from datasets import load_dataset
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint, speed_metrics
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from open_r1.configs import GRPOConfig, GRPOScriptArguments, GPGConfig
-from open_r1.rewards import get_reward_funcs
-from open_r1.utils import get_tokenizer
-from open_r1.utils.callbacks import get_callbacks
-from open_r1.utils.wandb_logging import init_wandb_training
+from hetero_rl.configs import GRPOConfig, GRPOScriptArguments, GPGConfig
+from hetero_rl.rewards import get_reward_funcs
+from hetero_rl.utils import get_tokenizer
+from hetero_rl.utils.callbacks import get_callbacks
+from hetero_rl.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
-from open_r1.utils.data_utils import custom_loading_dataset, loading_deepmath
+from hetero_rl.utils.data_utils import custom_loading_dataset, loading_deepmath
 from transformers import TrainerCallback
 from pathlib import Path
 
@@ -2065,7 +2065,7 @@ class Learner_MoISTrainer(Trainer):
                     # for kk in table:
                     #     print(f"{kk}:{len(table[kk])}")
 
-                    # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
+                    # torch.save(table,f"/userhome/Research_HUB/GPG/Hetero-RL/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
@@ -2289,7 +2289,7 @@ def main(script_args, training_args, model_args):
     # Save everything else on main process
     kwargs = {
         "dataset_name": script_args.dataset_name,
-        "tags": ["open-r1"],
+        "tags": ["Hetero-RL"],
     }
     if trainer.accelerator.is_main_process:
         trainer.create_model_card(**kwargs)

@@ -28,13 +28,13 @@ import torch
 import transformers
 from datasets import load_dataset
 from transformers.trainer_utils import get_last_checkpoint
-from open_r1.configs import MoISScriptArguments, GRPOConfig
-from open_r1.rewards import get_reward_funcs
-from open_r1.utils import get_tokenizer
-from open_r1.utils.callbacks import get_callbacks
-from open_r1.utils.wandb_logging import init_wandb_training
+from hetero_rl.configs import MoISScriptArguments, GRPOConfig
+from hetero_rl.rewards import get_reward_funcs
+from hetero_rl.utils import get_tokenizer
+from hetero_rl.utils.callbacks import get_callbacks
+from hetero_rl.utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
-from open_r1.utils.data_utils import custom_loading_dataset, loading_deepmath
+from hetero_rl.utils.data_utils import custom_loading_dataset, loading_deepmath
 from transformers import TrainerCallback
 from pathlib import Path
 from trl.extras.profiling import profiling_decorator, profiling_context
@@ -61,7 +61,7 @@ from trl.trainer.utils import (
     pad,
 )
 from accelerate.utils import reduce, broadcast
-from open_r1.Time_Delay import get_delay_sampler
+from hetero_rl.Time_Delay import get_delay_sampler
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -541,7 +541,7 @@ class SamplerGRPOTrainer(GRPOTrainer):
                     }
 
                     # print(f"table is done (sampler_script_v2.py)")
-                    # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
+                    # torch.save(table,f"/userhome/Research_HUB/GPG/Hetero-RL/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})

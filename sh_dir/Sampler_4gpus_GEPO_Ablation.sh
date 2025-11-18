@@ -10,20 +10,18 @@ num_generations=$6
 cppo_beta=$7
 sampler_id=$8
 ########################## parameters ##########################
-########################## resume_from_checkpoint ##########################
-#cp /userhome/Research_HUB/GPG/open-r1/src/open_r1/weight_only/torch_checkpoint_engine.py /opt/conda/envs/openrlhf/lib/python3.10/site-packages/deepspeed/runtime/checkpoint_engine/torch_checkpoint_engine.py
-#echo "weights_only=False"
+
 ModelPath="/extrahome0/HF_models/Qwen/Qwen3-1.7B" \
 #ModelPath="/extrahome0/save_dir/4gpus/Learner_GEPO+_2k_cfgv6b/Qwen3-1.7B/checkpoint-1088"
 ########################## resume_from_checkpoint ##########################
 
-log_path=/userhome/Research_HUB/GPG/open-r1/log_dir/rebuttal/sampler/${loss_type}/${wandb_name}_$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
+log_path=/userhome/Research_HUB/GPG/Hetero-RL/log_dir/rebuttal/sampler/${loss_type}/${wandb_name}_$1_sampler${sampler_id}_$2_cfg$3_${formatted_time}.log
 mkdir -p "$(dirname "$log_path")"
 echo $log_path
 export WANDB_MODE=offline
-export WANDB_DIR=/userhome/Research_HUB/GPG/open-r1/wandb/rebuttal/sampler${sampler_id}
+export WANDB_DIR=/userhome/Research_HUB/GPG/Hetero-RL/wandb/rebuttal/sampler${sampler_id}
 export USE_FLASH_ATTN=true
-export PYTHONPATH=/userhome/Research_HUB/GPG/open-r1/src
+export PYTHONPATH=/userhome/Research_HUB/GPG/Hetero-RL/src
 export WORLD_SIZE=1
 export RANK=0
 export GPUS=4
@@ -66,7 +64,7 @@ accelerate launch --config_file recipes/accelerate_configs/ddp_4gpus.yaml \
   --num_train_epochs 3 --gradient_accumulation_steps 8 --max_completion_length 2048 --max_prompt_length 768 \
   --scale_rewards False --eval_strategy 'no' \
   --model_name_or_path $ModelPath \
-  --dataset_name "/extrahome0/HF_datasets/open-r1/simplelr_qwen_level3to5" \
+  --dataset_name "/extrahome0/HF_datasets/Hetero-RL/simplelr_qwen_level3to5" \
   --log_completions False --logging_steps 32 \
   --per_device_train_batch_size 8 \
   --per_device_eval_batch_size 8 \
