@@ -24,12 +24,12 @@ from sympy.abc import alpha
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint, speed_metrics
 
-from open_r1.configs import GRPOConfig, GRPOScriptArguments
-from open_r1.rewards import get_reward_funcs
-from open_r1.utils import get_tokenizer
-from open_r1.utils.callbacks import get_callbacks
-from open_r1.utils.wandb_logging import init_wandb_training
-from open_r1.utils.data_utils import custom_loading_dataset, loading_deepmath
+from hetero_rl.configs import GRPOConfig, GRPOScriptArguments
+from hetero_rl.rewards import get_reward_funcs
+from hetero_rl.utils import get_tokenizer
+from hetero_rl.utils.callbacks import get_callbacks
+from hetero_rl.utils.wandb_logging import init_wandb_training
+from hetero_rl.utils.data_utils import custom_loading_dataset, loading_deepmath
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 from torch.utils.data import DataLoader, Dataset
@@ -40,7 +40,7 @@ from transformers.utils import is_torch_xla_available
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 from typing import Dict, List, Any
-from open_r1.rewards import accuracy_reward_lv35
+from hetero_rl.rewards import accuracy_reward_lv35
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from trl.trainer.grpo_trainer import RepeatSampler
 from trl.extras.profiling import profiling_context, profiling_decorator
