@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from transformers import AutoTokenizer
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict,load_from_disk
 
 
 # def custom_loading_dataset(dataset_name, train_name='train.parquet', test_name='test.parquet'):
@@ -151,4 +151,80 @@ def custom_loading_dataset(dataset_name, train_name='train.parquet', test_name='
         'test': test_dataset
     })
 
+    return dataset_dict
+
+
+def loading_deepmath(dataset_name, train_name='train.parquet', test_name='test.parquet', max_length=512, tokenizer=None):
+    """
+    Load and preprocess a dataset from Parquet files, and filter out samples exceeding a specified length.
+
+    Args:
+        dataset_name (str): The base directory of the dataset.
+        train_name (str, optional): The name of the training file. Defaults to 'train.parquet'.
+        test_name (str, optional): The name of the test file. Defaults to 'test.parquet'.
+        max_length (int, optional): Maximum length of the samples to keep. Defaults to 512.
+        tokenizer (str, optional): tokenizer to use. Defaults to 'bert-base-uncased'.
+
+    Returns:
+        DatasetDict: A dictionary-like object containing the training and test datasets.
+    """
+    ##############################################################################################
+    # 读取训练数据
+    all_train_dataset = load_from_disk(dataset_name)
+    # 定义列名映射
+    column_mapping_train = {
+        'final_answer': 'answer',
+        'question': 'problem',
+        'difficulty': 'difficulty',
+        'topic': 'topic',
+    }
+    # 定义列名映射 重命名列
+    all_train_dataset = all_train_dataset.rename_columns(column_mapping_train)
+
+    # 定义批量计算长度函数
+    def compute_length(examples):
+        inputs = tokenizer(
+            examples["problem"],  # 👈
+            padding=False,
+            truncation=False,
+            return_attention_mask=False,
+            return_tensors=None
+        )
+        lengths = [len(ids) for ids in inputs["input_ids"]]
+        return {"text_length": lengths}
+
+    # 批量添加长度列
+    all_train_dataset = all_train_dataset.map(
+        compute_length,
+        batched=True,
+        batch_size=1000,
+        num_proc=4,
+        desc="计算文本长度"
+    )
+
+    # 假设你过滤的是 train split
+    high_lv_dataset = all_train_dataset['train'].filter(
+        lambda x: x['difficulty'] >= 6.5 and x['text_length'] <= max_length,
+        desc="过滤样本"
+    )
+
+    # 现在 high_lv_dataset 是一个 Dataset 对象，可以调用 .train_test_split()
+    split_dataset = high_lv_dataset.train_test_split(
+        test_size=64,
+        shuffle=True,
+        seed=42
+    )
+
+    train_dataset = split_dataset['train']
+    val_dataset = split_dataset['test']
+
+    n_all = all_train_dataset['train'].num_rows
+    n_train = train_dataset.num_rows
+    n_val = val_dataset.num_rows
+    print(f"raw data samples: {n_all}, train: {n_train}, eval: {n_val}")
+    # 创建 DatasetDict
+    dataset_dict = DatasetDict({
+        'train': train_dataset,
+        'test': val_dataset
+    })
     return dataset_dict

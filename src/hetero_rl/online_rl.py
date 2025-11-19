@@ -24,12 +24,12 @@ from sympy.abc import alpha
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint, speed_metrics
 
-from hetero_rl.configs import GRPOConfig, GRPOScriptArguments
-from hetero_rl.rewards import get_reward_funcs
-from hetero_rl.utils import get_tokenizer
-from hetero_rl.utils.callbacks import get_callbacks
-from hetero_rl.utils.wandb_logging import init_wandb_training
-from hetero_rl.utils.data_utils import custom_loading_dataset, loading_deepmath
+from open_r1.configs import GRPOConfig, GRPOScriptArguments
+from open_r1.rewards import get_reward_funcs
+from open_r1.utils import get_tokenizer
+from open_r1.utils.callbacks import get_callbacks
+from open_r1.utils.wandb_logging import init_wandb_training
+from open_r1.utils.data_utils import custom_loading_dataset, loading_deepmath
 from trl import GRPOTrainer, ModelConfig, TrlParser, get_peft_config
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 from torch.utils.data import DataLoader, Dataset
@@ -40,7 +40,7 @@ from transformers.utils import is_torch_xla_available
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 from typing import Dict, List, Any
-from hetero_rl.rewards import accuracy_reward_lv35
+from open_r1.rewards import accuracy_reward_lv35
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from trl.trainer.grpo_trainer import RepeatSampler
 from trl.extras.profiling import profiling_context, profiling_decorator
@@ -127,7 +127,20 @@ class OnlineRLTrainer(GRPOTrainer):
         self.metric_key_prefix = ""
         self.batch_ids = 0
         super().__init__(*args, **kwargs)
-
+    # 使用GPG的 log函数
+    # def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    #     mode = "train" if self.model.training else "eval"
+    #     metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+    #     # if self._metrics[mode].get('num_identical_reward_groups') is not None:
+    #     #     metrics['num_same_reward_groups'] = self._metrics[mode]['num_identical_reward_groups']
+    #
+    #     # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+    #     # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+    #     if mode == "eval":
+    #         metrics = {f"eval_{key}": val for key, val in metrics.items()}
+    #     logs = {**logs, **metrics}
+    #     Trainer.log(self, logs, start_time)
+    #     self._metrics[mode].clear()
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -204,7 +217,7 @@ class OnlineRLTrainer(GRPOTrainer):
             # Clipping at token-level & Clipping wider
             sgn_A = torch.sign(advantages)
             coef_1 = sgn_A.unsqueeze(1) * (per_token_logps - old_per_token_logps)
-            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            coef_2 = torch.clamp(coef_1, math.log(1 - self.epsilon_low), math.log(1 + self.epsilon_high))
             sgn_A_log_probs_diff_min = torch.min(coef_1, coef_2)
             log_probs_diff_min = sgn_A.unsqueeze(1) * sgn_A_log_probs_diff_min
             # Geometric-Mean Policy Optimization
@@ -717,7 +730,7 @@ class OnlineRLTrainer(GRPOTrainer):
                     }
 
                     # print(f"table is done (sampler_script_v2.py)")
-                    # torch.save(table,f"/workspace/hetero_rl/wandb/debug/table.pt")
+                    # torch.save(table,f"/userhome/Research_HUB/GPG/open-r1/wandb/debug/table.pt")
 
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
@@ -769,6 +782,16 @@ def main(script_args, training_args, model_args):
 
     if "wandb" in training_args.report_to:
         init_wandb_training(training_args)
+        if training_args.local_rank==0:
+            current_file_path = __file__
+            current_file_name = os.path.basename(current_file_path)
+            wandb.login()
+            wandb.init(project=os.environ["WANDB_PROJECT"],
+                       entity = os.environ["WANDB_ENTITY"],
+                       # config=dict(training_args),
+                       name=script_args.wandb_name if script_args.wandb_name is not None else current_file_name
+                       )
+
 
     ################
     # Load tokenizer
@@ -852,7 +875,7 @@ def main(script_args, training_args, model_args):
         eval_dataset=eval_dataset,
         peft_config=get_peft_config(model_args),
         callbacks=get_callbacks(training_args, model_args),
-        processing_class=tokenizer
+        processing_class=tokenizer,
     )
 
     ###############
@@ -889,7 +912,7 @@ def main(script_args, training_args, model_args):
     # Save everything else on main process
     kwargs = {
         "dataset_name": script_args.dataset_name,
-        "tags": ["hetero_rl"],
+        "tags": ["open-r1"],
     }
     if trainer.accelerator.is_main_process:
         trainer.create_model_card(**kwargs)

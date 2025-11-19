@@ -15,7 +15,9 @@
 
 from dataclasses import dataclass, field
 from typing import Optional
+
 import trl
+
 
 # TODO: add the shared options with a mixin to reduce code duplication
 @dataclass
@@ -51,7 +53,58 @@ class GRPOConfig(trl.GRPOConfig):
     )
 
 @dataclass
-class HeteroRLScriptArguments(trl.ScriptArguments):
+class GPGConfig(GRPOConfig):
+    """
+    args for callbacks, benchmarks etc
+    """
+
+    scale_batch: bool = field(default=False, metadata={"help": "divide std use group or batch std."})
+    adjust_lr: bool = field(default=False, metadata={"help": "adjust lr based on the valid sample within a batch."})
+    weighted_sample: bool = field(default=False, metadata={"help": "weight sample based on the running acc."})
+    adjust_gd: bool = field(default=False, metadata={"help": "adjust gd  based on the valid sample within a batch."})
+    sample_strategy: Optional[str] = field(
+        default="uniform",
+        metadata={"help": ("hard, uniform.")},
+    )
+    min_inverse_alpha: float = field(default=0.5, metadata={"help": "minimum inverse alpha"})
+
+
+
+@dataclass
+class SFTConfig(trl.SFTConfig):
+    """
+    args for callbacks, benchmarks etc
+    """
+
+    benchmarks: list[str] = field(
+        default_factory=lambda: [], metadata={"help": "The benchmarks to run after training."}
+    )
+    callbacks: list[str] = field(
+        default_factory=lambda: [], metadata={"help": "The callbacks to run during training."}
+    )
+    chat_template: Optional[str] = field(default=None, metadata={"help": "The chat template to use."})
+    system_prompt: Optional[str] = field(
+        default=None,
+        metadata={"help": "The optional system prompt to use for benchmarking."},
+    )
+    hub_model_revision: Optional[str] = field(
+        default="main",
+        metadata={"help": "The Hub model branch to push the model to."},
+    )
+    overwrite_hub_revision: bool = field(default=False, metadata={"help": "Whether to overwrite the Hub revision."})
+    push_to_hub_revision: bool = field(default=False, metadata={"help": "Whether to push to a Hub revision/branch."})
+    wandb_entity: Optional[str] = field(
+        default=None,
+        metadata={"help": ("The entity to store runs under.")},
+    )
+    wandb_project: Optional[str] = field(
+        default=None,
+        metadata={"help": ("The project to store runs under.")},
+    )
+
+
+@dataclass
+class GRPOScriptArguments(trl.ScriptArguments):
     """
     Script arguments for the GRPO training script.
 
@@ -129,7 +182,7 @@ class HeteroRLScriptArguments(trl.ScriptArguments):
     )
     kl_temp: float = field(
         default=0.002,
-        metadata={"help": "动态kl遗忘 (gepo+)"},
+        metadata={"help": "动态kl遗忘"},
     )
     cppo_beta: float = field(
         default=0.0,
@@ -140,11 +193,11 @@ class HeteroRLScriptArguments(trl.ScriptArguments):
         metadata={"help": "退火路径最大长度"},
     )
     use_benchmark: bool = field(
-        default=True,
+        default=False, 
         metadata={"help": "Whether enable the benchmark for evaluation."},
     )
     use_think: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether enable the think mode."},
     )
     system_prompt_think: str = field(
@@ -153,6 +206,28 @@ class HeteroRLScriptArguments(trl.ScriptArguments):
     system_prompt_nothink: str = field(
         default="You are a helpful AI Assistant, designed to provided well-reasoned and detailed responses. Please put your final answer within \\boxed{}. Also, indicate that it is the answer.",
     )
+    use_Psync: bool = field(
+        default=False,
+        metadata={"help": "Whether enable the dynamic model-sync mode."},
+    )
+    sync_beta: float = field(
+        default=0.2,
+        metadata={"help": "use to cal Psync"},
+    )
+    entropy_bar: float = field(
+        default=0.1,
+        metadata={"help": "use to cal Psync"},
+    )
+    entropy_epsilon: float = field(
+        default=0.1,
+        metadata={"help": "use to cal Psync"},
+    )
+
+@dataclass
+class MoISScriptArguments(GRPOScriptArguments):
+    """
+    Script arguments for the MoIS training script.
+    """
     delay_sampler: str = field(
         default="lognormal",
         metadata={
@@ -176,10 +251,6 @@ class HeteroRLScriptArguments(trl.ScriptArguments):
         default=60.0,
         metadata={"help": "时间延迟-基础时间延迟 服从于时间延迟分布 P(t)"},
     )
-    wandb_name: Optional[str] = field(
-        default=None,
-        metadata={"help": "说明当前wandb-run的功能"},
-    )
     sampler_id: int = field(
         default=0,
         metadata={"help": "The id of current sampler."},
@@ -189,6 +260,103 @@ class HeteroRLScriptArguments(trl.ScriptArguments):
         metadata={"help": "The amount of samplers."},
     )
     online_mode: bool = field(
-        default=False,
+        default=False, 
         metadata={"help": "Whether force the sampler to use the latest weight for sampling."},
+    )
+    wandb_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "说明当前wandb-run的功能"},
+    )
+
+@dataclass
+class AsyGPGScriptArguments(trl.ScriptArguments):
+    """
+    Script arguments for the GRPO training script.
+
+    Args:
+        reward_funcs (`list[str]`):
+            List of reward functions. Possible values: 'accuracy', 'format', 'reasoning_steps', 'cosine', 'repetition_penalty', 'length', 'tag_count', 'code', 'ioi_code', 'code_format'.
+        cosine_min_value_wrong (`float`):
+            Minimum reward for cosine scaling for wrong answers.
+        cosine_max_value_wrong (`float`):
+            Maximum reward for cosine scaling for wrong answers.
+        cosine_min_value_correct (`float`):
+            Minimum reward for cosine scaling for correct answers.
+        cosine_max_value_correct (`float`):
+            Maximum reward for cosine scaling for correct answers.
+        cosine_max_len (`int`):
+            Maximum length for cosine scaling.
+        code_language (`str`):
+            Language for code format reward.
+    """
+
+    reward_funcs: list[str] = field(
+        default_factory=lambda: ["accuracy", "format", "tag_count"],
+        metadata={
+            "help": "List of reward functions. Possible values: 'accuracy', 'format', 'reasoning_steps', 'cosine', 'repetition_penalty', 'length', tag_count', 'code', 'code_format'"
+        },
+    )
+    cosine_min_value_wrong: float = field(
+        default=0.0,
+        metadata={"help": "Minimum reward for wrong answers"},
+    )
+    cosine_max_value_wrong: float = field(
+        default=-0.5,
+        metadata={"help": "Maximum reward for wrong answers"},
+    )
+    cosine_min_value_correct: float = field(
+        default=0.5,
+        metadata={"help": "Minimum reward for correct answers"},
+    )
+    cosine_max_value_correct: float = field(
+        default=1.0,
+        metadata={"help": "Maximum reward for correct answers"},
+    )
+    cosine_max_len: int = field(
+        default=1000,
+        metadata={"help": "Maximum length for scaling"},
+    )
+    repetition_n_grams: int = field(
+        default=3,
+        metadata={"help": "Number of n-grams for repetition penalty reward"},
+    )
+    repetition_max_penalty: float = field(
+        default=-1.0,
+        metadata={"help": "Maximum (negative) penalty for for repetition penalty reward"},
+    )
+    code_language: str = field(
+        default="python",
+        metadata={
+            "help": "Language for code format reward. Based on E2B supported languages https://e2b.dev/docs/code-interpreting/supported-languages",
+            "choices": ["python", "javascript", "r", "java", "bash", "cpp"],
+        },
+    )
+    code_eval_test_batch_size: int = field(
+        default=1,
+        metadata={
+            "help": "for each generation, evaluate these many test cases in parallel, then check if any of them failed (0 score): if so stop evaluating; otherwise continue with the next batch of test cases. Useful to avoid overloading the eval server + save time on wrong solutions"
+        },
+    )
+    delay_sampler: str = field(
+        default="lognormal",
+        metadata={
+            "help": "时间延迟分布 P(t)",
+            "choices": ["lognormal", "weibull"],
+        },
+    )
+    lower_bound: float = field(
+        default=60.0,
+        metadata={"help": "时间延迟下界"},
+    )
+    upper_bound: float = field(
+        default=1920,
+        metadata={"help": "时间延迟上界"},
+    )
+    confidence: float = field(
+        default=0.995,
+        metadata={"help": "时间延迟采样器的置信度"},
+    )
+    default_delay: float = field(
+        default=60.0,
+        metadata={"help": "时间延迟-基础时间延迟 服从于时间延迟分布 P(t)"},
     )
