@@ -135,8 +135,70 @@ GEPO is the engine of **HeteroRL**, a framework that decouples sampling and lear
 
 ---
 
-## 📰 Latest Update: ∆L Normalization and GMPO Integrated into HeteroRL!
 
+## 📰 Latest Update: CISPO and TOPR Integrated into HeteroRL!
+
+<details>
+<summary>📢 <strong>Nov 20 Update(🖱️): Added Implementation of CISPO — Clipped IS-weight Policy Optimization!</strong></summary>
+
+<br>
+
+<h2 align="center">✨ Clipped IS-weight Policy Optimization (CISPO): Stable & Efficient RL without Token Clipping</h2>
+
+📅 **Release Date**: Jun 16, 2025 (arXiv)  
+📄 **Paper**: [MiniMax-M1: Scaling Test-Time Compute Efficiently with Lightning Attention](https://arxiv.org/abs/2506.13585)  
+🧑‍💻 **Authors**: MiniMax AI Team  
+🔗 **Implementation**: Integrated into HeteroRL; compatible with hybrid-attention and long-context models
+
+---
+
+### ⚡ Why It Matters
+Traditional PPO/GRPO-style algorithms **clip token-level policy updates** to enforce trust-region constraints. However, this inadvertently **discards critical low-probability tokens** (e.g., reasoning “forks” like *“Wait”*, *“Recheck”*) that are essential for exploration and scalable reasoning.  
+CISPO resolves this by **clipping the importance sampling (IS) weights** instead of the token updates, preserving **gradient signal from all tokens** while stabilizing off-policy training.
+
+✅ **No dropped tokens** – critical rare tokens remain learnable  
+✅ **Lower training variance** via bounded IS weights  
+✅ **Faster convergence**: **2× speedup** over DAPO on math RL tasks  
+✅ **Plug-and-play**: drop-in replacement for GRPO/DAPO in token-level RL setups
+
+> 💡 **Pro Tips**:  
+> - Use **asymmetric clipping**: typically only upper-bound IS weights (e.g., `clip(·, 0, 1+ε)` with `ε=0.2–0.4`)  
+> - Combine with **group-relative advantage normalization** (as in GRPO) for stable reward scaling  
+> - Avoid KL penalties — CISPO is designed to be **KL-free** and more compute-efficient  
+> - Ideal for **long CoT** and **hybrid-attention architectures** where token survival is crucial
+
+</details>
+
+<details>
+<summary>📢 <strong>Nov 19 Update(🖱️): Added Implementation of TOPR — Tapered Off-Policy REINFORCE!</strong></summary>
+
+<br>
+
+<h2 align="center">✨ Tapered Off-Policy REINFORCE (TOPR): Stable & Efficient Off-Policy RL for LLMs</h2>
+
+📅 **Release Date**: Mar 20, 2025 (arXiv)  
+📄 **Paper**: [Tapered Off-Policy REINFORCE](https://arxiv.org/abs/2503.14286)  
+🧑‍💻 **Authors**: Nicolas Le Roux, Marc G. Bellemare, Jonathan Lebensold, et al. (Mila & Reliant AI)  
+🔗 **Implementation**: Integrated into HeteroRL with native support for negative examples and asynchronous rollout datasets
+
+---
+
+### ⚡ Why It Matters
+Standard REINFORCE collapses in off-policy settings due to **unbounded negative updates**, while many popular methods (e.g., PPO, DPO) either **discard negative examples** or **suffer from limited off-policy capability**.  
+TOPR resolves this with an **asymmetric, tapered importance sampling** scheme that:
+
+✅ **Stably leverages both positive and negative examples** without KL regularization  
+✅ **Accelerates learning on rare positives** via SFT-style updates (clipping lower bound = 1)  
+✅ **Prevents destructive updates from negatives** via truncated importance ratios (clipping lower bound = 0)  
+✅ **Matches 70B-model performance with only 8B parameters** through iterative dataset curation (e.g., Anna Karenina sampling)
+
+> 💡 **Pro Tips**:  
+> - **Always keep negative examples** — they dramatically improve data efficiency and reduce “wasted inference.”  
+> - Tune the **baseline parameter** not for variance reduction, but to **control effective positive ratio** (~10–20% is optimal).  
+> - Combine TOPR with **dynamic dataset balancing** (e.g., favoring hard negatives) for multi-iteration gains.  
+> - Avoid gradient clipping values >1.0 unless using ratio truncation — standard IS can explode on skewed datasets.
+
+</details>
 <details>
 <summary>📢 <strong>Sep 26 Update(🖱️): Added Implementation of GMPO — Geometric-Mean Policy Optimization!</strong></summary>
 
