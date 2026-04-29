@@ -192,6 +192,10 @@ class GRPOScriptArguments(trl.ScriptArguments):
         default=12,
         metadata={"help": "退火路径最大长度"},
     )
+    staleness_strength: float = field(
+        default=0.35,
+        metadata={"help": "Controls how strongly staleness calibrates SAPC importance weights."},
+    )
     use_benchmark: bool = field(
         default=False, 
         metadata={"help": "Whether enable the benchmark for evaluation."},

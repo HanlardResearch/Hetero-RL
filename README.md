@@ -136,7 +136,40 @@ GEPO is the engine of **HeteroRL**, a framework that decouples sampling and lear
 ---
 
 
-## 📰 Latest Update: CISPO and TOPR Integrated into HeteroRL!
+<details>
+<summary>📢 <strong>Coming Soon(🧠): SAPC — Staleness-Aware Policy Calibration!</strong></summary>
+
+<br>
+
+<h2 align="center">✨ SAPC: Smooth Staleness-Aware Correction for Asynchronous LLM RL</h2>
+
+📅 **Release Date**: Coming Soon  
+📄 **Paper**: Coming Soon  
+🧑‍💻 **Authors**: Coming Soon  
+🔗 **Implementation**: Coming soon in HeteroRL; compatible with asynchronous actor–learner and GRPO-style RL pipelines
+
+---
+
+### ⚡ Why It Matters
+
+In scalable LLM RL, rollout generation and learner updates are often decoupled, making **stale-policy updates** unavoidable.  
+Raw importance ratios can explode under long autoregressive sequences, while PPO/GRPO-style clipping is static and does not consider how stale a sample actually is.
+
+SAPC addresses this by replacing hard clipping with a **smooth staleness-aware calibrated importance weight**. It contracts unreliable stale ratios toward the neutral point while preserving useful learning signals from fresher samples.
+
+✅ **Staleness-aware** – adapts correction strength using learner–sampler lag  
+✅ **Smooth calibration** – avoids discontinuous hard clipping  
+✅ **Closed-form coefficient** – derived with a Lambert-W based solution  
+✅ **Token-level & sequence-level variants** – supports both SAPC-token and SAPC-seq  
+✅ **Drop-in integration** – easy to plug into GRPO-style asynchronous learners  
+
+> 💡 **Pro Tips**:  
+> - Use **SAPC-token** as the default for token-level RL training  
+> - Use logarithmic learner–sampler lag as the staleness signal  
+> - Tune `staleness_strength` to control calibration intensity  
+> - Especially useful for replay, mini-batch reuse, async rollout queues, and off-policy LLM RL
+
+</details>
 
 <details>
 <summary>📢 <strong>Nov 20 Update(🖱️): Added Implementation of CISPO — Clipped IS-weight Policy Optimization!</strong></summary>

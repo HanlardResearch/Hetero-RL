@@ -180,6 +180,10 @@ if is_accelerate_available():
     if is_deepspeed_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
 import math
+try:
+    from scipy.special import lambertw as scipy_lambertw
+except ImportError:
+    scipy_lambertw = None
 from transformers.debug_utils import DebugOption
 from transformers.utils import is_torch_xla_available
 if is_torch_xla_available():
@@ -243,6 +247,55 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
     return torch.max(tensor[~torch.isnan(tensor)])
+
+
+def _lambertw0_positive_torch(x: torch.Tensor, max_iter: int = 20) -> torch.Tensor:
+    """Fallback principal Lambert-W branch for positive tensors, using Halley's method."""
+    x_float = x.float()
+    w = torch.where(x_float < 3.0, torch.log1p(x_float), torch.log(x_float.clamp(min=1e-12)))
+    w = torch.where(x_float > math.e, w - torch.log(w.clamp(min=1e-12)), w)
+
+    for _ in range(max_iter):
+        exp_w = torch.exp(w)
+        wew = w * exp_w
+        numerator = wew - x_float
+        denominator = exp_w * (w + 1.0) - ((w + 2.0) * numerator) / (2.0 * w + 2.0).clamp(min=1e-12)
+        w = w - numerator / denominator.clamp(min=1e-12)
+
+    return w.to(dtype=x.dtype)
+
+
+def lambertw0_positive(x: torch.Tensor) -> torch.Tensor:
+    if scipy_lambertw is None:
+        return _lambertw0_positive_torch(x)
+
+    w_np = scipy_lambertw(x.detach().double().cpu().numpy(), k=0).real
+    return torch.as_tensor(w_np, dtype=x.dtype, device=x.device)
+
+
+def sapc_calibrated_weight(
+    logps: torch.Tensor,
+    old_logps: torch.Tensor,
+    staleness: torch.Tensor,
+    staleness_strength: float = 0.35,
+) -> torch.Tensor:
+    log_ratio = logps - old_logps
+
+    staleness = staleness.detach().to(dtype=log_ratio.dtype, device=log_ratio.device)
+    scaled_staleness = (staleness_strength * staleness).clamp(min=0.0, max=20.0)
+    a = torch.expm1(scaled_staleness).clamp(min=1e-6)
+
+    safe_log_ratio = log_ratio.detach().clamp(min=-20.0, max=20.0)
+    raw_weight = torch.exp(safe_log_ratio)
+    exp_a = torch.exp(a.clamp(max=20.0))
+
+    pos_weight = lambertw0_positive(a * exp_a * raw_weight) / a
+    neg_weight = a / lambertw0_positive(a * exp_a / raw_weight).clamp(min=1e-12)
+    calibrated_weight = torch.where(log_ratio >= 0, pos_weight, neg_weight)
+    calibrated_weight = torch.nan_to_num(calibrated_weight, nan=1.0, posinf=1.0, neginf=1.0)
+
+    grad_weight = calibrated_weight.detach()
+    return grad_weight * logps + (calibrated_weight.detach() - grad_weight * logps.detach())
 
 
 def identity(x):
@@ -734,6 +787,12 @@ class Learner_MoISTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
         advantages = inputs["advantages"]
         old_per_token_logps = inputs["sampler_per_token_logps"]
+        diff_step = self.state.global_step - inputs["model_ids"]
+        if isinstance(diff_step, torch.Tensor):
+            diff_step = diff_step.to(device=per_token_logps.device, dtype=per_token_logps.dtype)
+        else:
+            diff_step = torch.tensor(diff_step, device=per_token_logps.device, dtype=per_token_logps.dtype)
+        log_diff_step = torch.log(diff_step.clamp(min=1.0))
 
         if mode == "train":
             assert old_per_token_logps is not None
@@ -741,7 +800,9 @@ class Learner_MoISTrainer(Trainer):
             old_per_token_logps = per_token_logps.detach()
 
         ################## CPPO-KL 正则化损失 ##################
-        cppo_per_token_kl = torch.exp(old_per_token_logps - per_token_logps) - (old_per_token_logps - per_token_logps) - 1
+        # cppo_per_token_kl = torch.exp(old_per_token_logps - per_token_logps) - (old_per_token_logps - per_token_logps) - 1
+        cppo_per_token_kl = (old_per_token_logps - per_token_logps).square()
+
         cppo_per_seq_kl = (cppo_per_token_kl * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
         loss_cppo_kl = cppo_per_seq_kl.mean()
 
@@ -818,7 +879,6 @@ class Learner_MoISTrainer(Trainer):
             loss = -(per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
 
 
-
         elif self.loss_type == "gmpo": #  Geometric-Mean Policy Optimization https://arxiv.org/pdf/2507.20673
             # Clipping at token-level & Clipping wider
             sgn_A = torch.sign(advantages)
@@ -865,6 +925,33 @@ class Learner_MoISTrainer(Trainer):
             per_seq_loss = -torch.min(per_seq_loss1, per_seq_loss2)
             loss = per_seq_loss.mean()
 
+        elif self.loss_type == "sapc-token":
+            per_token_staleness = torch.ones_like(per_token_logps) * log_diff_step
+            coef_1 = sapc_calibrated_weight(
+                per_token_logps,
+                old_per_token_logps,
+                per_token_staleness,
+                staleness_strength=self.script_args.staleness_strength,
+            )
+            coef_2 = coef_1
+
+            per_token_loss = -(coef_1 * advantages.unsqueeze(1))
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+
+        elif self.loss_type == "sapc-seq":
+            seq_log_p = (per_token_logps * completion_mask).sum(dim=1)
+            seq_old_log_p = (old_per_token_logps * completion_mask).sum(dim=1)
+            seq_staleness = torch.ones_like(seq_log_p) * log_diff_step
+            coef_1 = sapc_calibrated_weight(
+                seq_log_p,
+                seq_old_log_p,
+                seq_staleness,
+                staleness_strength=self.script_args.staleness_strength,
+            )
+            coef_2 = coef_1
+            per_seq_loss = -(coef_1 * advantages)
+            loss = per_seq_loss.mean()
+
         elif self.loss_type in ["c-grpo","c-gspo","c-gepo",]:
             if self.loss_type == "c-gspo":
                 coef_1 = learner_seq_p / sampler_seq_p
@@ -909,7 +996,7 @@ class Learner_MoISTrainer(Trainer):
         # var_ratio_gspo = (ratio_gspo.square() * normlized_q).sum() - (ratio_gspo * normlized_q).sum().square()
         # var_P_EqQ =  (ratio_pEqQ.square() * normlized_q).sum() - (ratio_pEqQ * normlized_q).sum().square()
         # var_P_EqP =  (ratio_pEqP.square() * normlized_q).sum() - (ratio_pEqP * normlized_q).sum().square()
-        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "delta_ln", "gmpo", "cispo",  "tis"]:
+        if self.loss_type in ["grpo", "bnpo", "dr_grpo", "delta_ln", "gmpo", "cispo", "tis", "sapc-token"]:
             var_coef1 = ((coef_1 * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
             var_coef2 = ((coef_2 * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)).var()
         else:
